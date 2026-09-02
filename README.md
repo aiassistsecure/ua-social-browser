@@ -83,7 +83,7 @@ Run the real thing:
 pnpm --filter @workspace/ua-shell run start
 ```
 
-You need `AIAssIST_API_KEY` for the AI features. Copy `.env.example` and fill it in — the key is read only by the API server and never reaches a renderer process.
+You need `AIASSIST_API_KEY` for the AI features. Copy `.env.example` and fill it in — the key is read only by the API server and never reaches a renderer process.
 
 ## Trying it without the desktop shell
 
@@ -115,7 +115,7 @@ Adding one means: an entry in the platform registry, an adapter in the shell, th
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `AIAssIST_API_KEY` | — | Credential for the AI provider. Server-side only. |
+| `AIASSIST_API_KEY` | — | Credential for the AI provider. Server-side only. |
 | `PORT` | `8080` | Assigned by the host. Never hard-code it. |
 | `NEDB_DATA_DIR` | `<cwd>/.data/ua-social-browser` | Ledger location. Back this up — it is the app's memory. |
 | `UA_SESSION_BRIDGE_URL` | unset | Loopback address of the shell's publisher. Unset disables publishing. |

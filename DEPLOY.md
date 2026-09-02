@@ -28,14 +28,14 @@ build both halves the shell hosts with `PORT=5173 BASE_PATH=/ pnpm --filter
 run build`, then launch `pnpm --filter @workspace/ua-shell run start`, which
 builds the Electron shell, spawns its own API server on loopback, and opens the
 browser — this one needs a desktop with a display and will not run in the Replit
-container. Set `AIAssIST_API_KEY` before you expect any AI feature to answer.
+container. Set `AIASSIST_API_KEY` before you expect any AI feature to answer.
 
 ---
 
 ## 1. Prerequisites
 
 - Node 24 and pnpm (already provisioned in the Replit container)
-- `AIAssIST_API_KEY` — set as a Replit Secret; it never leaves the API server
+- `AIASSIST_API_KEY` — set as a Replit Secret; it never leaves the API server
 - For the native shell: a desktop OS with a display. The shell is a Chromium
   (Electron) application; it cannot run in the Replit container, which has no
   GUI. Everything in it except the browser windows themselves — the session
@@ -47,7 +47,7 @@ container. Set `AIAssIST_API_KEY` before you expect any AI feature to answer.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `AIAssIST_API_KEY` | yes | — | Credential for `api.AiAssist.net`. Server-side only. |
+| `AIASSIST_API_KEY` | yes | — | Credential for `api.AiAssist.net`. Server-side only. |
 | `PORT` | injected | `8080` | Assigned per artifact by Replit. Never hard-code it. |
 | `NEDB_DATA_DIR` | no | `<cwd>/.data/ua-social-browser` | Append-only ledger location. Point it at a persistent volume in the desktop build. |
 | `UA_SESSION_BRIDGE_URL` | no | unset | Loopback address of the native shell's publisher IPC endpoint. **Unset means publishing is disabled.** |
@@ -97,7 +97,7 @@ curl -s localhost:8080/api/schedule/status
 ## 4. Publishing the web surface on Replit
 
 Use the workspace's Publish flow (Autoscale). It deploys the sidebar UI and the
-API server. Set `AIAssIST_API_KEY` in the deployment's secrets — deployment
+API server. Set `AIASSIST_API_KEY` in the deployment's secrets — deployment
 secrets are separate from development secrets. Leave `UA_SESSION_BRIDGE_URL`
 unset in that environment.
 
@@ -352,7 +352,7 @@ it is marked external in `artifacts/api-server/build.mjs`. Bundling it produces
 - [ ] `pnpm --filter @workspace/api-server run test` green — the scheduled
       dispatch suite, which needs no display either
 - [ ] `pnpm --filter @workspace/api-spec run codegen` re-run after any spec edit
-- [ ] `AIAssIST_API_KEY` present in the target environment
+- [ ] `AIASSIST_API_KEY` present in the target environment
 - [ ] `UA_SESSION_BRIDGE_URL` / `UA_SESSION_BRIDGE_TOKEN` unset on the web
       surface; on the desktop build, confirmed to be set by the shell rather
       than by hand, and no pairing file left behind

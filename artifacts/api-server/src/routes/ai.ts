@@ -17,9 +17,9 @@ type ChatCompletionResponse = {
 };
 
 function getApiKey() {
-  const key = process.env.AIAssIST_API_KEY;
+  const key = process.env.AIASSIST_API_KEY;
   if (!key) {
-    throw new Error("AIAssIST_API_KEY is not configured");
+    throw new Error("AIASSIST_API_KEY is not configured");
   }
   return key;
 }

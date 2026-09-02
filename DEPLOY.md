@@ -13,6 +13,25 @@ not the shipped product, and it deliberately cannot post to any network — see
 
 ---
 
+## Running it, in one paragraph
+
+Run `pnpm install`, then `pnpm --filter @workspace/api-spec run codegen` to
+generate the client from the OpenAPI contract, and `pnpm run typecheck` to
+confirm the tree is sound. For the development surface, start the two services —
+`pnpm --filter @workspace/api-server run dev` (builds and serves the API on
+`PORT`, mounted at `/api`) and `pnpm --filter @workspace/ua-social-browser run
+dev` (the Vite dev server for the sidebar UI) — which is all you need for
+drafting, approving, scheduling, and the ledger; publishing answers `503` there
+because there is no signed-in session to post through. For the real product,
+build both halves the shell hosts with `PORT=5173 BASE_PATH=/ pnpm --filter
+@workspace/ua-social-browser run build` and `pnpm --filter @workspace/api-server
+run build`, then launch `pnpm --filter @workspace/ua-shell run start`, which
+builds the Electron shell, spawns its own API server on loopback, and opens the
+browser — this one needs a desktop with a display and will not run in the Replit
+container. Set `AIAssIST_API_KEY` before you expect any AI feature to answer.
+
+---
+
 ## 1. Prerequisites
 
 - Node 24 and pnpm (already provisioned in the Replit container)
@@ -36,6 +55,7 @@ not the shipped product, and it deliberately cannot post to any network — see
 | `UA_API_ACCESS_TOKEN` | in the shell | unset | When set, every `/api` request must present it in `X-UA-Api-Token` and CORS is switched off entirely. The shell mints one for the API server it starts, and reads this variable to pair with an API server you run yourself. Unset on the web surface, which holds no publishing capability. |
 | `HOST` | no | `0.0.0.0` | Interface to bind. The shell sets `127.0.0.1`; Replit needs the default so its proxy can reach the artifact. |
 | `UA_TENANCY_MODE` | no | `single` | `single` scopes every document to the `personal` tenant. `multi` requires an auth layer to set `res.locals.tenantId` and returns 401 without one. |
+| `UA_SCHEDULER_INTERVAL_MS` | no | `30000` | How often the scheduler looks for scheduled posts that are due. `0` switches automatic dispatch off; a scheduled post then waits for someone to press Post. Ignored in multi-tenant mode — see [Scheduled dispatch](#6-scheduled-dispatch). |
 
 Read by the native shell only (`desktop/ua-shell`):
 
@@ -71,6 +91,7 @@ curl -s localhost:8080/api/healthz
 curl -s localhost:8080/api/tenant
 curl -s localhost:8080/api/browser/integrity
 curl -s "localhost:8080/api/session/status?workspaceId=ws-1"
+curl -s localhost:8080/api/schedule/status
 ```
 
 ## 4. Publishing the web surface on Replit
@@ -257,7 +278,42 @@ retry after a network stall cannot double-post. The shell keeps the spent keys i
 went out, and a post whose outcome could not be confirmed. "Not signed in" is not
 terminal — the operator signs in and the same approved draft goes out.
 
-## 6. Why publishing fails on the web surface
+## 6. Scheduled dispatch
+
+An approved draft with a send time goes out on its own, without the app being
+open or focused. `src/lib/scheduler.ts` wakes on `UA_SCHEDULER_INTERVAL_MS`,
+finds drafts whose time has passed, and sends them down the same path a manual
+press uses — same approval check, same idempotency key, same bridge.
+
+Three properties matter more than the schedule itself:
+
+- **The scheduler never writes the browser state document.** The app owns that
+  document; two writers would clobber each other. Outcomes go to a separate
+  dispatch log, and the app folds them back into the drafts it holds. That is
+  how a post that went out while the app was closed still reads as posted when
+  it opens a month later.
+- **One attempt per instruction.** A failure is not retried in a loop; the
+  reason is recorded and a person decides. Moving a post to a new time is a new
+  instruction and earns one more attempt.
+- **It is off in multi-tenant mode.** With no authenticated tenant, the
+  scheduler has nobody to act for, so scheduled posts wait for a human press.
+  `GET /api/schedule/status` says so in `detail` rather than failing quietly.
+
+```
+GET  /api/schedule/status       { active, bridgeConfigured, intervalMs, detail }
+GET  /api/schedule/dispatches   recent attempts for this tenant (a tail, for looking)
+POST /api/schedule/outcomes     { keys: string[] } → outcomes for those exact keys
+```
+
+Reconciliation asks by key, not by reading a recent feed — a client that has
+been away for a month asks about the handful of drafts it left behind and gets
+every one of their outcomes. The tail endpoint is for humans inspecting what
+happened.
+
+Automatic dispatch needs the bridge, so on the web surface `active` is `false`
+and `bridgeConfigured` is `false`. Nothing is silently queued.
+
+## 7. Why publishing fails on the web surface
 
 Posts leave through **your own signed-in browser session**, never through a
 server-held token. With no shell attached, `POST /api/publish` answers `503` and
@@ -265,7 +321,7 @@ the draft is marked `failed` with the reason attached. That is the intended
 behaviour: a silent success would be a lie about whether something reached an
 audience.
 
-## 7. Networks
+## 8. Networks
 
 X is the primary network. Also configured: Instagram, Facebook, Threads,
 LinkedIn, Bluesky, Mastodon, Reddit, TikTok, YouTube, Pinterest, Tumblr. Each
@@ -278,7 +334,7 @@ Live network views render only inside the native shell. X, Instagram, and the
 rest send frame-blocking headers, so the web surface shows an explicit "runs in
 the desktop shell" state and an open-in-tab link rather than a fake feed.
 
-## 8. Data and integrity
+## 9. Data and integrity
 
 State is a single append-only `nedb-engine` ledger, scoped by tenant id.
 `GET /api/browser/integrity` returns `verified`, `sequence`, and `head`;
@@ -289,10 +345,12 @@ Back up `NEDB_DATA_DIR` — that directory is the product's memory.
 it is marked external in `artifacts/api-server/build.mjs`. Bundling it produces
 `Cannot find module 'nedb-engine-linux-x64-gnu'` at startup.
 
-## 9. Release checklist
+## 10. Release checklist
 
 - [ ] `pnpm run typecheck` clean
 - [ ] `pnpm --filter @workspace/ua-shell run test` green
+- [ ] `pnpm --filter @workspace/api-server run test` green — the scheduled
+      dispatch suite, which needs no display either
 - [ ] `pnpm --filter @workspace/api-spec run codegen` re-run after any spec edit
 - [ ] `AIAssIST_API_KEY` present in the target environment
 - [ ] `UA_SESSION_BRIDGE_URL` / `UA_SESSION_BRIDGE_TOKEN` unset on the web

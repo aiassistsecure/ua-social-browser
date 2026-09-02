@@ -8,18 +8,28 @@
  *     see (Bluesky and Mastodon hold tokens in local storage), the adapter says
  *     so instead of guessing.
  *
- *  2. *Can this build post here?* — only X, the primary network, drives its
- *     composer. Every other network reports honestly that this build cannot
- *     post for it; the operator posts from the workspace tab, where their own
- *     session already is. A silent success would be a lie about whether
- *     something reached an audience, and a fabricated one is worse than an
- *     error.
+ *  2. *Can this build post here?* — the text networks are driven through the
+ *     shared composer flow in `compose-driver.ts`. The ones that are refused
+ *     are refused for a reason no selector can fix: a network that cannot
+ *     accept a text-only post, or one that needs a target and a title a draft
+ *     does not carry. Each says which, because "not supported" tells the
+ *     operator nothing about whether waiting for a later build would help.
+ *
+ * A silent success would be a lie about whether something reached an audience,
+ * and a fabricated one is worse than an error. No adapter may report
+ * `published` on anything but the network's own confirmation.
+ *
+ * The selectors below belong to other people's products and will drift. Each
+ * driven network needs one real post from a real account before it is trusted;
+ * a drifted selector surfaces as a loud failure on that step, not as a quiet
+ * non-post.
  */
 
 import type { WebContents } from "electron";
 import type { PublishOutcome } from "../session-bridge-server";
 import { runInPage } from "./page";
 import { unconfirmedOutcome } from "../idempotency";
+import { composerPage, runComposeFlow, type ComposerConfig } from "./compose-driver";
 
 export type SessionDetection =
   | { kind: "cookie"; names: string[] }
@@ -38,18 +48,45 @@ export type PlatformAdapter = {
   origin: string;
   /** Where the automated publisher starts. */
   composeUrl: string;
+  /**
+   * Where a live sign-in starts. The operator types their credentials into
+   * the network's own page inside this workspace's session; nothing about
+   * that page is read, filled, or stored by the shell.
+   */
+  signInUrl: string;
   detection: SessionDetection;
   submit(context: SubmitContext): Promise<PublishOutcome>;
 };
 
-function notAutomated(label: string) {
+/**
+ * A network this build will not post to, and the reason it will not.
+ *
+ * The reason is the useful part. "Requires media" means no future selector fix
+ * changes anything until drafts can carry an image; "needs a community and a
+ * title" names a gap in the draft model. Both are different from "the composer
+ * moved", and an operator deciding whether to wait or to post by hand needs to
+ * know which they have.
+ */
+function cannotPost(label: string, reason: string) {
   return async (): Promise<PublishOutcome> => ({
     kind: "rejected",
     detail:
-      `This build cannot drive ${label}'s composer. Open the workspace tab and post from ` +
-      `your signed-in session there; the draft stays approved until it is sent.`,
+      `${label}: ${reason} Open the workspace tab and post from your signed-in session there; ` +
+      `the draft stays approved until it is sent.`,
     status: 501,
   });
+}
+
+/** Wires a composer config to the shared flow. */
+function driven(label: string, config: ComposerConfig) {
+  return async (context: SubmitContext): Promise<PublishOutcome> =>
+    runComposeFlow(composerPage(context.contents, config), {
+      label,
+      body: context.body,
+      deadline: context.deadline,
+      allowHotkey: config.submitHotkey === true,
+      hasOpener: config.opener !== undefined,
+    });
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -212,11 +249,100 @@ async function xSubmit(context: SubmitContext): Promise<PublishOutcome> {
   );
 }
 
+/**
+ * Composer configs, one per driven network.
+ *
+ * Each selector list is deliberately more than one option: products ship a new
+ * class name far more often than they change what a control *is*, so an
+ * `aria-label` or a `data-testid` alongside the obvious selector buys real
+ * resilience for no complexity.
+ */
+const COMPOSERS: Record<string, ComposerConfig> = {
+  linkedin: {
+    // `shareActive` opens the share box straight away rather than making the
+    // driver hunt for the "Start a post" button on the feed.
+    editor: '.ql-editor[contenteditable="true"], div[role="textbox"][contenteditable="true"]',
+    editorKind: "contenteditable",
+    submit:
+      'button.share-actions__primary-action, button[aria-label="Post"], div[role="dialog"] button.artdeco-button--primary',
+    login: { selectors: 'input[name="session_key"]', pathPattern: "^/(login|uas/login|checkpoint)" },
+    confirmation: {
+      toast: '[data-test-artdeco-toast-item], .artdeco-toast-item__message',
+      successText: "post (was )?(successfully )?(shared|posted)|your post is live",
+      errorText: "went wrong|couldn't|could not|failed|try again",
+      stillComposingPath: "shareActive",
+    },
+  },
+  facebook: {
+    opener:
+      'div[role="button"][aria-label*="mind"], div[role="button"][aria-label*="Mind"], [data-pagelet="FeedComposer"] div[role="button"]',
+    editor: 'div[role="dialog"] div[contenteditable="true"][role="textbox"]',
+    editorKind: "contenteditable",
+    submit:
+      'div[role="dialog"] div[role="button"][aria-label="Post"], div[role="dialog"] button[type="submit"]',
+    login: { selectors: 'input[name="pass"]', pathPattern: "^/(login|checkpoint)" },
+    confirmation: {
+      errorText: "went wrong|couldn't|could not|failed|try again",
+    },
+  },
+  threads: {
+    opener:
+      'div[role="button"][aria-label*="Create"], div[role="button"][aria-label*="new thread"], svg[aria-label="Create"]',
+    editor: 'div[contenteditable="true"][role="textbox"], div[data-lexical-editor="true"]',
+    editorKind: "contenteditable",
+    submit: 'div[role="button"][aria-label="Post"], div[role="dialog"] div[role="button"]:not([aria-disabled="true"])',
+    // Threads posts on Ctrl/Cmd+Enter, which is steadier than its button.
+    submitHotkey: true,
+    login: { selectors: 'input[name="username"]', pathPattern: "^/login" },
+    confirmation: {
+      successText: "posted|thread posted",
+      errorText: "went wrong|couldn't|could not|failed|try again",
+    },
+  },
+  bluesky: {
+    editor: '[data-testid="composerTextInput"], div[contenteditable="true"][role="textbox"]',
+    editorKind: "contenteditable",
+    submit: '[data-testid="composerPublishBtn"]',
+    submitHotkey: true,
+    login: { selectors: '[data-testid="loginUsernameInput"], [data-testid="signInButton"]' },
+    confirmation: {
+      successText: "posted|your post was published",
+      errorText: "went wrong|couldn't|could not|failed|try again",
+      stillComposingPath: "intent/compose",
+    },
+  },
+  mastodon: {
+    editor: 'textarea.autosuggest-textarea__textarea, textarea#compose-textarea, .compose-form textarea',
+    editorKind: "textarea",
+    submit: 'button.compose-form__submit, .compose-form button[type="submit"]',
+    submitHotkey: true,
+    login: { pathPattern: "^/auth/sign_in" },
+    confirmation: {
+      errorText: "went wrong|couldn't|could not|failed|try again",
+    },
+  },
+  tumblr: {
+    editor: 'div[contenteditable="true"][role="textbox"], .post-form--content [contenteditable="true"]',
+    editorKind: "contenteditable",
+    submit: 'button[aria-label="Post"], [data-testid="postFormButton"], .post-form--footer button.blue',
+    login: { pathPattern: "^/login" },
+    confirmation: {
+      errorText: "went wrong|couldn't|could not|failed|try again",
+      stillComposingPath: "^/new/",
+    },
+  },
+};
+
+/** Networks that take a picture or a video, not a paragraph. */
+const MEDIA_REQUIRED =
+  "a post here needs an image or a video, and a draft carries text. Nothing this build could click would change that.";
+
 const ADAPTERS: PlatformAdapter[] = [
   {
     platform: "x",
     label: "X",
     origin: "https://x.com",
+    signInUrl: "https://x.com/i/flow/login",
     composeUrl: "https://x.com/compose/post",
     detection: { kind: "cookie", names: ["auth_token"] },
     submit: xSubmit,
@@ -225,95 +351,109 @@ const ADAPTERS: PlatformAdapter[] = [
     platform: "instagram",
     label: "Instagram",
     origin: "https://www.instagram.com",
+    signInUrl: "https://www.instagram.com/accounts/login/",
     composeUrl: "https://www.instagram.com/create/style/",
     detection: { kind: "cookie", names: ["sessionid"] },
-    submit: notAutomated("Instagram"),
+    submit: cannotPost("Instagram", MEDIA_REQUIRED),
   },
   {
     platform: "facebook",
     label: "Facebook",
     origin: "https://www.facebook.com",
+    signInUrl: "https://www.facebook.com/login",
     composeUrl: "https://www.facebook.com/",
     detection: { kind: "cookie", names: ["c_user"] },
-    submit: notAutomated("Facebook"),
+    submit: driven("Facebook", COMPOSERS.facebook!),
   },
   {
     platform: "threads",
     label: "Threads",
     origin: "https://www.threads.net",
+    signInUrl: "https://www.threads.net/login",
     composeUrl: "https://www.threads.net/",
     detection: { kind: "cookie", names: ["sessionid"] },
-    submit: notAutomated("Threads"),
+    submit: driven("Threads", COMPOSERS.threads!),
   },
   {
     platform: "linkedin",
     label: "LinkedIn",
     origin: "https://www.linkedin.com",
-    composeUrl: "https://www.linkedin.com/feed/",
+    signInUrl: "https://www.linkedin.com/login",
+    composeUrl: "https://www.linkedin.com/feed/?shareActive=true",
     detection: { kind: "cookie", names: ["li_at"] },
-    submit: notAutomated("LinkedIn"),
+    submit: driven("LinkedIn", COMPOSERS.linkedin!),
   },
   {
     platform: "bluesky",
     label: "Bluesky",
     origin: "https://bsky.app",
-    composeUrl: "https://bsky.app/",
+    signInUrl: "https://bsky.app/",
+    composeUrl: "https://bsky.app/intent/compose",
     detection: {
       kind: "unsupported",
       reason: "Bluesky keeps its session in local storage, which a cookie check cannot see.",
     },
-    submit: notAutomated("Bluesky"),
+    submit: driven("Bluesky", COMPOSERS.bluesky!),
   },
   {
     platform: "mastodon",
     label: "Mastodon",
     origin: "https://mastodon.social",
-    composeUrl: "https://mastodon.social/",
+    signInUrl: "https://mastodon.social/auth/sign_in",
+    composeUrl: "https://mastodon.social/home",
     detection: {
       kind: "unsupported",
       reason: "Mastodon sessions belong to whichever instance the workspace uses, not to one fixed origin.",
     },
-    submit: notAutomated("Mastodon"),
+    submit: driven("Mastodon", COMPOSERS.mastodon!),
   },
   {
     platform: "reddit",
     label: "Reddit",
     origin: "https://www.reddit.com",
+    signInUrl: "https://www.reddit.com/login",
     composeUrl: "https://www.reddit.com/submit",
     detection: { kind: "cookie", names: ["reddit_session"] },
-    submit: notAutomated("Reddit"),
+    submit: cannotPost(
+      "Reddit",
+      "a submission needs a community and a title, and a draft carries neither yet. Posting one into the wrong subreddit is not a mistake worth automating.",
+    ),
   },
   {
     platform: "tiktok",
     label: "TikTok",
     origin: "https://www.tiktok.com",
+    signInUrl: "https://www.tiktok.com/login",
     composeUrl: "https://www.tiktok.com/upload",
     detection: { kind: "cookie", names: ["sessionid"] },
-    submit: notAutomated("TikTok"),
+    submit: cannotPost("TikTok", MEDIA_REQUIRED),
   },
   {
     platform: "youtube",
     label: "YouTube",
     origin: "https://www.youtube.com",
+    signInUrl: "https://accounts.google.com/ServiceLogin?service=youtube",
     composeUrl: "https://studio.youtube.com/",
     detection: { kind: "cookie", names: ["SAPISID", "SID"] },
-    submit: notAutomated("YouTube"),
+    submit: cannotPost("YouTube", MEDIA_REQUIRED),
   },
   {
     platform: "pinterest",
     label: "Pinterest",
     origin: "https://www.pinterest.com",
+    signInUrl: "https://www.pinterest.com/login/",
     composeUrl: "https://www.pinterest.com/pin-builder/",
     detection: { kind: "cookie", names: ["_pinterest_sess"] },
-    submit: notAutomated("Pinterest"),
+    submit: cannotPost("Pinterest", MEDIA_REQUIRED),
   },
   {
     platform: "tumblr",
     label: "Tumblr",
     origin: "https://www.tumblr.com",
+    signInUrl: "https://www.tumblr.com/login",
     composeUrl: "https://www.tumblr.com/new/text",
     detection: { kind: "cookie", names: ["logged_in"] },
-    submit: notAutomated("Tumblr"),
+    submit: driven("Tumblr", COMPOSERS.tumblr!),
   },
 ];
 

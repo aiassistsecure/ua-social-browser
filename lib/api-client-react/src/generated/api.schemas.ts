@@ -130,6 +130,21 @@ export interface SessionStatus {
   detail: string;
 }
 
+export interface SignInRequest {
+  workspaceId: string;
+}
+
+export interface SignInInvitation {
+  workspaceId: string;
+  /** True when the native browser session bridge is reachable */
+  bridgeAvailable: boolean;
+  /** True when a sign-in tab is now in front of the operator */
+  opened: boolean;
+  /** True when the workspace already had a session, so no tab was needed. Never a claim about a sign-in that just happened. */
+  alreadySignedIn: boolean;
+  detail: string;
+}
+
 /**
  * Human sign-off captured in the UI before anything is posted
  */

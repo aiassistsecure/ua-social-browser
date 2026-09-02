@@ -35,6 +35,23 @@ export const GetSessionStatusResponse = zod.object({
 
 
 /**
+ * Opens the network's own login page in this workspace's tab, under the workspace's isolated session and UA profile. Credentials are typed into the network's page: this app never sees, fills, or stores them, and no API token is minted anywhere. Returns as soon as the tab is up, because a human sign-in takes minutes and may involve a second factor. Whether the operator finished is answered by GET /session/status reading the session back — never by this call.
+ * @summary Open a live sign-in for a workspace inside the desktop shell
+ */
+export const BeginSignInBody = zod.object({
+  "workspaceId": zod.string()
+})
+
+export const BeginSignInResponse = zod.object({
+  "workspaceId": zod.string(),
+  "bridgeAvailable": zod.boolean().describe('True when the native browser session bridge is reachable'),
+  "opened": zod.boolean().describe('True when a sign-in tab is now in front of the operator'),
+  "alreadySignedIn": zod.boolean().describe('True when the workspace already had a session, so no tab was needed. Never a claim about a sign-in that just happened.'),
+  "detail": zod.string()
+})
+
+
+/**
  * Submits an already human-approved post through the browser session that belongs to the workspace. The request is rejected unless an explicit human approval is attached. Requires the native session bridge; there is no server-side fallback that posts on the user's behalf.
  * @summary Post approved content through the workspace's authenticated session
  */

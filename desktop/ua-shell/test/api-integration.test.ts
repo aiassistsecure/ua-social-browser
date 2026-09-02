@@ -58,6 +58,13 @@ describe(
             detail: "Stub publisher standing in for Chromium.",
           };
         },
+        async beginSignIn(workspaceId) {
+          return {
+            opened: true,
+            alreadySignedIn: false,
+            detail: `Stub publisher pretended to open a sign-in tab for ${workspaceId}.`,
+          };
+        },
         async publish(input) {
           return ledger.run(input.idempotencyKey, input, async (): Promise<PublishOutcome> => {
             published.push(input.draftId);

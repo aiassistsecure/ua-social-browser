@@ -28,6 +28,8 @@ import type {
   PublishRequest,
   PublishResult,
   SessionStatus,
+  SignInInvitation,
+  SignInRequest,
   TenantInfo
 } from './api.schemas';
 
@@ -218,6 +220,78 @@ export function useGetSessionStatus<TData = Awaited<ReturnType<typeof getSession
 
 
 
+
+export const getBeginSignInUrl = () => {
+
+
+
+
+  return `/api/session/signin`
+}
+
+/**
+ * Opens the network's own login page in this workspace's tab, under the workspace's isolated session and UA profile. Credentials are typed into the network's page: this app never sees, fills, or stores them, and no API token is minted anywhere. Returns as soon as the tab is up, because a human sign-in takes minutes and may involve a second factor. Whether the operator finished is answered by GET /session/status reading the session back — never by this call.
+ * @summary Open a live sign-in for a workspace inside the desktop shell
+ */
+export const beginSignIn = async (signInRequest: SignInRequest, options?: Parameters<typeof customFetch>[1]): Promise<SignInInvitation> => {
+
+  return customFetch<SignInInvitation>(getBeginSignInUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(signInRequest)
+  }
+);}
+
+
+
+
+
+export const getBeginSignInMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof beginSignIn>>, TError,{data: BodyType<SignInRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof beginSignIn>>, TError,{data: BodyType<SignInRequest>}, TContext> => {
+
+const mutationKey = ['beginSignIn'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof beginSignIn>>, {data: BodyType<SignInRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  beginSignIn(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type BeginSignInMutationResult = NonNullable<Awaited<ReturnType<typeof beginSignIn>>>
+    export type BeginSignInMutationBody = BodyType<SignInRequest>
+    export type BeginSignInMutationError = ErrorType<void>
+
+    /**
+ * @summary Open a live sign-in for a workspace inside the desktop shell
+ */
+export const useBeginSignIn = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof beginSignIn>>, TError,{data: BodyType<SignInRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof beginSignIn>>,
+        TError,
+        {data: BodyType<SignInRequest>},
+        TContext
+      > => {
+      return useMutation(getBeginSignInMutationOptions(options));
+    }
 
 export const getPublishPostUrl = () => {
 

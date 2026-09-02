@@ -18,6 +18,7 @@ import type {
   PublishRequestInput,
   PublisherPort,
   SessionSnapshot,
+  SignInInvitation,
 } from "../session-bridge-server";
 import type { IdempotencyLedger } from "../idempotency";
 import { unconfirmedOutcome } from "../idempotency";
@@ -48,11 +49,23 @@ function identityForEntry(entry: WorkspaceEntry) {
   });
 }
 
+/**
+ * How the publisher reaches the shell's tab strip.
+ *
+ * Kept as a port rather than a direct reference because the publisher is built
+ * before the window exists, and because a signing-in operator should land in
+ * the same tab they already use for that network.
+ */
+export type WorkspaceTabs = {
+  openOrFocus(workspaceId: string, url: string): Promise<void>;
+};
+
 export function createPublisher(deps: {
   directory: WorkspaceDirectory;
   ledger: IdempotencyLedger;
+  tabs: WorkspaceTabs;
 }): PublisherPort {
-  const { directory, ledger } = deps;
+  const { directory, ledger, tabs } = deps;
 
   async function signedIn(
     entry: WorkspaceEntry,
@@ -171,6 +184,85 @@ export function createPublisher(deps: {
     }
   }
 
+  /**
+   * Live sign-in.
+   *
+   * Every account this app can post from is signed in here, by hand, in the
+   * network's own page — inside the workspace's isolated jar and behind its UA
+   * profile. That is the whole authentication story: no password is typed into
+   * this app, no OAuth token is minted for a server to hold, and nothing is
+   * stored anywhere but the session Chromium keeps for that workspace.
+   *
+   * Consequences worth stating plainly, because they are load-bearing:
+   *
+   *  - It happens in the workspace's own tab, in front of the operator.
+   *    Publishing uses a hidden window because no human is there; a sign-in
+   *    exists precisely so a human can act, and it belongs on the tab strip
+   *    beside the network it signs into.
+   *  - No preload runs in it, so the login page cannot see this app.
+   *  - The shell never reads, fills, or intercepts the form. It has no reason
+   *    to know the password, and code that could learn it is code that could
+   *    leak it.
+   *  - Success is not declared here. It is read back from the cookie jar by
+   *    `sessionStatus`, so a closed window never turns into a false badge.
+   */
+  async function beginSignIn(workspaceId: string): Promise<SignInInvitation> {
+    const entry = await directory.resolve(workspaceId);
+    if (!entry) {
+      return {
+        opened: false,
+        alreadySignedIn: false,
+        detail: `The shell does not know a workspace called "${workspaceId}".`,
+      };
+    }
+
+    const adapter = adapterFor(entry.platform);
+    if (!adapter) {
+      return {
+        opened: false,
+        alreadySignedIn: false,
+        detail: `No adapter for ${entry.platform}; this shell does not know where that network's sign-in lives.`,
+      };
+    }
+
+    // Cookie-detectable networks can answer this without opening anything.
+    if (adapter.detection.kind === "cookie") {
+      const existing = await signedIn(entry, adapter);
+      if (existing.authenticated) {
+        return {
+          opened: false,
+          alreadySignedIn: true,
+          detail: `This workspace is already signed in to ${adapter.label}.`,
+        };
+      }
+    }
+
+    try {
+      // The tab carries this workspace's session and UA profile because it is
+      // opened under the same identity every other view of this workspace uses.
+      await tabs.openOrFocus(workspaceId, adapter.signInUrl);
+    } catch (error) {
+      log.error("Sign-in tab failed to open", { workspaceId, ...errorFields(error) });
+      return {
+        opened: false,
+        alreadySignedIn: false,
+        detail: `Could not open ${adapter.label}'s sign-in page: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+
+    log.info("Opened a live sign-in tab", { workspaceId, platform: entry.platform });
+
+    return {
+      opened: true,
+      alreadySignedIn: false,
+      detail:
+        `Sign in to ${adapter.label} in this workspace's tab. It runs in the workspace's own session ` +
+        `and UA profile, so the account stays separate from every other workspace.`,
+    };
+  }
+
   async function publish(input: PublishRequestInput): Promise<PublishOutcome> {
     return ledger.run(
       input.idempotencyKey,
@@ -210,5 +302,5 @@ export function createPublisher(deps: {
     );
   }
 
-  return { sessionStatus, publish };
+  return { sessionStatus, publish, beginSignIn };
 }

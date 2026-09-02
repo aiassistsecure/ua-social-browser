@@ -290,6 +290,32 @@ export class ShellWindow {
     return tab.id;
   }
 
+  /**
+   * One tab per network.
+   *
+   * A workspace *is* an account, so a second tab for the same workspace is
+   * never a second account — it is the same session shown twice, which is how
+   * an operator ends up posting from a stale view or signing in on a tab that
+   * is not the one they are watching. Reuse the workspace's tab and steer it.
+   */
+  async openOrFocusTab(workspaceId: string, url: string): Promise<string> {
+    const existing = this.tabs.find((tab) => tab.identity.workspaceId === workspaceId);
+    if (!existing) return this.openTab(workspaceId, url);
+
+    this.activeTabId = existing.id;
+    if (url && existing.url !== url) {
+      existing.url = url;
+      void existing.view.webContents.loadURL(url);
+    }
+
+    this.window.focus();
+    this.layout();
+    this.publishChromeState();
+
+    log.info("Workspace tab focused", { workspaceId, url });
+    return existing.id;
+  }
+
   private activeTab(): Tab | null {
     return this.tabs.find((tab) => tab.id === this.activeTabId) ?? null;
   }

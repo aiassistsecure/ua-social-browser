@@ -3,13 +3,14 @@ import {
   Bell,
   ExternalLink,
   Loader2,
+  LogIn,
   MonitorSmartphone,
   PenLine,
   RefreshCw,
   ShieldCheck,
   ShieldX,
 } from 'lucide-react';
-import { useGetSessionStatus } from '@workspace/api-client-react';
+import { useBeginSignIn, useGetSessionStatus } from '@workspace/api-client-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,6 +23,10 @@ import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { platformProfile } from '@/lib/platforms';
 import { createId, logActivity } from '@/lib/workspace';
 import { getShell } from '@/lib/shell-bridge';
+
+/** How often, and for how long, a pending sign-in is checked for. */
+const SIGN_IN_POLL_MS = 3_000;
+const SIGN_IN_WATCH_MS = 3 * 60_000;
 
 export function Network({ state, updateState, workspace, profile }: SectionProps) {
   const { toast } = useToast();
@@ -36,6 +41,9 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
   const network = platformProfile(workspace.platform);
   const sessionQuery = useGetSessionStatus({ workspaceId: workspace.id });
   const session = sessionQuery.data;
+  const { refetch: refetchSession } = sessionQuery;
+  const signIn = useBeginSignIn();
+  const [awaitingSignIn, setAwaitingSignIn] = useState(false);
 
   useEffect(() => {
     const shell = getShell();
@@ -133,6 +141,57 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
 
   const sessionReady = Boolean(session?.authenticated);
 
+  /**
+   * Signing in happens in the workspace's tab, in the network's own page, so
+   * this view cannot observe it directly — and must not guess. It asks the
+   * session itself until the account shows up, then stops. An opened tab is
+   * never treated as a signed-in account.
+   */
+  useEffect(() => {
+    if (!awaitingSignIn) return;
+    if (sessionReady) {
+      setAwaitingSignIn(false);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (Date.now() - startedAt > SIGN_IN_WATCH_MS) {
+        setAwaitingSignIn(false);
+        return;
+      }
+      void refetchSession();
+    }, SIGN_IN_POLL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [awaitingSignIn, sessionReady, refetchSession]);
+
+  async function startSignIn() {
+    try {
+      const invitation = await signIn.mutateAsync({
+        data: { workspaceId: workspace.id },
+      });
+
+      setAwaitingSignIn(invitation.opened);
+      toast({
+        title: invitation.alreadySignedIn
+          ? 'Already signed in'
+          : invitation.opened
+            ? `Sign in to ${network.label} in the tab`
+            : 'No sign-in available here',
+        description: invitation.detail,
+      });
+      void refetchSession();
+    } catch {
+      toast({
+        title: 'Could not start a sign-in',
+        description:
+          'The workspace API did not answer, so nothing was opened. Nothing about this workspace changed.',
+        variant: 'destructive',
+      });
+    }
+  }
+
   return (
     <SectionShell
       title={`${network.label} · ${workspace.name}`}
@@ -153,6 +212,22 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
             />
             Session
           </Button>
+          {!sessionReady ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void startSignIn()}
+              disabled={signIn.isPending || awaitingSignIn}
+              data-testid="button-sign-in"
+            >
+              {signIn.isPending || awaitingSignIn ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <LogIn className="mr-2 h-4 w-4" />
+              )}
+              Sign in
+            </Button>
+          ) : null}
           {network.notificationsUrl ? (
             <Button
               variant="outline"
@@ -193,7 +268,9 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
               ? 'Checking the workspace session'
               : sessionReady
                 ? `Signed in${session?.accountHandle ? ` as ${session.accountHandle}` : ''}`
-                : 'Not ready to post'}
+                : awaitingSignIn
+                  ? 'Waiting for the sign-in to finish in the tab'
+                  : 'Not ready to post'}
           </p>
           <p className="text-xs text-muted-foreground">
             {sessionQuery.isError

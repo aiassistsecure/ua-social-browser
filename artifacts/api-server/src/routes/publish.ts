@@ -1,12 +1,17 @@
 import { Router, type IRouter } from "express";
-import { GetSessionStatusResponse, PublishPostBody } from "@workspace/api-zod";
+import {
+  BeginSignInBody,
+  BeginSignInResponse,
+  GetSessionStatusResponse,
+  PublishPostBody,
+} from "@workspace/api-zod";
 import { readBrowserState } from "../lib/browser-store";
 import { releaseClaim, takeClaim } from "../lib/dispatch-claims";
 import {
   dispatchApprovedPost,
   idempotencyKeyFor,
 } from "../lib/publish-dispatch";
-import { readSessionStatus } from "../lib/session-bridge";
+import { beginSignIn, readSessionStatus } from "../lib/session-bridge";
 import { asStoredDraft, type StoredDraft } from "../lib/stored-draft";
 import { tenantOrUnauthorized } from "../lib/tenant";
 
@@ -123,6 +128,34 @@ router.get("/session/status", async (req, res) => {
 
   const status = await readSessionStatus(workspaceId);
   return res.json(GetSessionStatusResponse.parse(status));
+});
+
+/**
+ * Live sign-in.
+ *
+ * The account is authenticated inside the shell's own browser, in the network's
+ * own login page, under this workspace's isolated session. Nothing about the
+ * credentials passes through here — this endpoint only asks the shell to put
+ * that page in front of the operator, and says whether it managed to.
+ */
+router.post("/session/signin", async (req, res) => {
+  const parsed = BeginSignInBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "workspaceId is required" });
+  }
+
+  const invitation = await beginSignIn(parsed.data.workspaceId);
+
+  req.log.info(
+    {
+      workspaceId: invitation.workspaceId,
+      opened: invitation.opened,
+      alreadySignedIn: invitation.alreadySignedIn,
+    },
+    "Live sign-in requested",
+  );
+
+  return res.json(BeginSignInResponse.parse(invitation));
 });
 
 router.post("/publish", async (req, res) => {

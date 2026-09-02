@@ -111,6 +111,19 @@ Each network carries its own character limit, media rules, thread support, alt-t
 
 Adding one means: an entry in the platform registry, an adapter in the shell, the `platform` enum in `lib/api-spec/openapi.yaml`, then codegen.
 
+What the shell can *drive* differs by network, and it says which rather than answering everything with a shrug:
+
+- **Driven end to end** — X (its own bespoke adapter), LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr. The shell opens the composer inside the workspace's own session, types the approved text, submits, and waits for the network's own confirmation.
+- **Refused, with the actual reason** — Instagram, TikTok, YouTube and Pinterest want an image or video, and an approved draft carries text; Reddit needs a community and a title the draft model does not have. Those answer with that specific reason and a link to post in the tab. The draft stays approved either way.
+
+## Signing in (FaceMask)
+
+Every account is authenticated **inside this browser, by you**. Sign in on a network and its own login page opens in that workspace's tab, under the workspace's isolated session and UA profile. The app never sees, fills, or stores the credentials, and no API token is minted anywhere: the cookie the network sets is the only proof of the account, and it never leaves that workspace's partition.
+
+One tab per network. A workspace *is* an account, so a second tab for it would only be the same session shown twice — which is how you end up signing in on a tab you are not watching.
+
+The request returns the moment the tab is up. Whether you actually finished — including a second factor, which can take minutes — is answered by re-reading the session, never by the fact that a tab opened.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -125,9 +138,11 @@ Full deployment and packaging notes, including the session-bridge HTTP contract,
 
 ## Status
 
-Working: workspace isolation, UA profiles, the AI composer, the approval gate, scheduled dispatch, the ledger, and the twelve platform adapters.
+Working: workspace isolation, UA profiles, live in-shell sign-in, the AI composer, the approval gate, scheduled dispatch, the ledger, and the twelve platform adapters.
 
 Not there yet: signed installers for each OS, and per-tab UA switching (it is per-workspace today).
+
+Honest caveat: the composer selectors for LinkedIn, Facebook, Threads, Bluesky, Mastodon and Tumblr are written from how those products work, and have not yet been run against a real signed-in account. Give each one a single real post before trusting it. When a selector drifts, the attempt fails loudly — it never reports a post that did not happen.
 
 ## License
 

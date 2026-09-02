@@ -156,6 +156,78 @@ export async function readSessionStatus(
   }
 }
 
+export type BridgeSignIn = {
+  workspaceId: string;
+  bridgeAvailable: boolean;
+  opened: boolean;
+  alreadySignedIn: boolean;
+  detail: string;
+};
+
+/**
+ * Asks the shell to open a live sign-in.
+ *
+ * This reports only what the shell did with the tab. Whether an account is now
+ * usable is a separate question, answered by reading the session back — so
+ * `opened: true` must never be rendered as "signed in".
+ */
+export async function beginSignIn(workspaceId: string): Promise<BridgeSignIn> {
+  if (!isBridgeConfigured()) {
+    return {
+      workspaceId,
+      bridgeAvailable: false,
+      opened: false,
+      alreadySignedIn: false,
+      detail:
+        bridgeUrl() === null
+          ? "Signing in happens inside the desktop shell, where your own browser session lives. The web surface has no session to sign in to."
+          : unavailableDetail(),
+    };
+  }
+
+  try {
+    const { ok, payload } = await callBridge(
+      `/signin/${encodeURIComponent(workspaceId)}`,
+      { method: "POST" },
+    );
+
+    const data = (payload ?? {}) as {
+      opened?: boolean;
+      alreadySignedIn?: boolean;
+      detail?: string;
+    };
+
+    if (!ok) {
+      return {
+        workspaceId,
+        bridgeAvailable: true,
+        opened: false,
+        alreadySignedIn: false,
+        detail: data.detail ?? "The shell could not open a sign-in for this workspace.",
+      };
+    }
+
+    return {
+      workspaceId,
+      bridgeAvailable: true,
+      opened: Boolean(data.opened),
+      alreadySignedIn: Boolean(data.alreadySignedIn),
+      detail: data.detail ?? "The shell opened a sign-in tab for this workspace.",
+    };
+  } catch (error) {
+    return {
+      workspaceId,
+      bridgeAvailable: false,
+      opened: false,
+      alreadySignedIn: false,
+      detail:
+        error instanceof Error
+          ? `Session bridge unreachable: ${error.message}`
+          : "Session bridge unreachable.",
+    };
+  }
+}
+
 export async function publishThroughSession(
   input: BridgePublishInput,
 ): Promise<BridgePublishOutcome> {

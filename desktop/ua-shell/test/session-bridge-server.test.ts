@@ -17,6 +17,7 @@ import {
   type PublisherPort,
   type SessionBridgeHandle,
   type SessionSnapshot,
+  type SignInInvitation,
 } from "../src/session-bridge-server";
 
 /** Stands in for the capability the shell mints at startup. */
@@ -29,6 +30,13 @@ const calls: Recorded[] = [];
 let nextPublish: PublishOutcome = { kind: "published", postUrl: "https://x.com/a/status/1", postId: "1" };
 let nextSession: SessionSnapshot = { authenticated: true, accountHandle: "@acme", detail: "signed in" };
 
+const signInCalls: string[] = [];
+let nextSignIn: SignInInvitation = {
+  opened: true,
+  alreadySignedIn: false,
+  detail: "Sign in to X in this workspace's tab.",
+};
+
 const stub: PublisherPort = {
   async sessionStatus(): Promise<SessionSnapshot> {
     return nextSession;
@@ -36,6 +44,10 @@ const stub: PublisherPort = {
   async publish(input): Promise<PublishOutcome> {
     calls.push(input);
     return nextPublish;
+  },
+  async beginSignIn(workspaceId) {
+    signInCalls.push(workspaceId);
+    return nextSignIn;
   },
 };
 
@@ -200,4 +212,53 @@ test("session status is reported unauthenticated without inventing a handle", as
   const json = (await response.json()) as Record<string, unknown>;
   assert.equal(json.authenticated, false);
   assert.equal(json.accountHandle, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Live sign-in
+// ---------------------------------------------------------------------------
+
+test("a sign-in request reaches the publisher and reports only what it did", async () => {
+  nextSignIn = {
+    opened: true,
+    alreadySignedIn: false,
+    detail: "Sign in to X in this workspace's tab.",
+  };
+
+  const response = await fetch(`${bridge.url}/signin/ws-1`, {
+    method: "POST",
+    headers: auth,
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), nextSignIn);
+  assert.ok(signInCalls.includes("ws-1"));
+});
+
+test("an already-signed-in workspace is told so rather than handed a tab", async () => {
+  nextSignIn = {
+    opened: false,
+    alreadySignedIn: true,
+    detail: "This workspace is already signed in to X.",
+  };
+
+  const response = await fetch(`${bridge.url}/signin/ws-2`, {
+    method: "POST",
+    headers: auth,
+  });
+
+  const payload = (await response.json()) as SignInInvitation;
+  assert.equal(payload.opened, false);
+  assert.equal(payload.alreadySignedIn, true);
+});
+
+test("opening a sign-in needs the capability token like everything else", async () => {
+  // Opening a tab in the operator's browser is a real side effect, so it is
+  // behind the same gate as publishing rather than being treated as harmless.
+  const before = signInCalls.length;
+
+  const response = await fetch(`${bridge.url}/signin/ws-1`, { method: "POST" });
+
+  assert.equal(response.status, 401);
+  assert.equal(signInCalls.length, before, "the publisher must not be consulted at all");
 });

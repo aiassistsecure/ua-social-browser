@@ -58,9 +58,31 @@ export type PublishOutcome =
   | { kind: "unauthenticated"; detail: string }
   | { kind: "rejected"; detail: string; status?: number };
 
+/**
+ * The result of asking for a live sign-in.
+ *
+ * Opening the window is all this reports. Whether the operator actually signed
+ * in is answered later by `GET /session/:workspaceId` reading the cookie jar —
+ * a window that was opened proves nothing about an account, and saying
+ * otherwise would put a "signed in" badge on an empty session.
+ */
+export type SignInInvitation = {
+  /** A sign-in window is now in front of the operator. */
+  opened: boolean;
+  /** The workspace was already signed in, so no window was needed. */
+  alreadySignedIn: boolean;
+  detail: string;
+};
+
 export type PublisherPort = {
   sessionStatus(workspaceId: string): Promise<SessionSnapshot>;
   publish(input: PublishRequestInput): Promise<PublishOutcome>;
+  /**
+   * Opens the network's own login page inside the workspace's masked session.
+   * Returns as soon as the window is up: a human sign-in takes minutes and may
+   * involve a second factor, so nothing here waits on it.
+   */
+  beginSignIn(workspaceId: string): Promise<SignInInvitation>;
 };
 
 export type BridgeLogger = {
@@ -223,6 +245,21 @@ export async function startSessionBridge(options: {
         accountHandle: snapshot.accountHandle,
         detail: snapshot.detail,
       });
+      return;
+    }
+
+    const signInMatch = /^\/signin\/(.+)$/.exec(path);
+    if (request.method === "POST" && signInMatch) {
+      const workspaceId = decodeURIComponent(signInMatch[1] as string);
+      const invitation = await publisher.beginSignIn(workspaceId);
+
+      logger?.info("Live sign-in requested", {
+        workspaceId,
+        opened: invitation.opened,
+        alreadySignedIn: invitation.alreadySignedIn,
+      });
+
+      sendJson(response, 200, invitation);
       return;
     }
 

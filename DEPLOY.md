@@ -234,10 +234,17 @@ token and no headless impersonation anywhere in this path.
   Mastodon report "cannot tell from cookies" instead of guessing: Bluesky keeps
   its session in local storage, and a Mastodon session belongs to whichever
   instance the workspace uses.
-- **Automated submission is implemented for X only.** Every other network
-  answers `501` with an explicit "open the workspace tab and post there"; the
-  draft stays approved. Adding a network means one adapter in
-  `src/publisher/adapters.ts`.
+- **Seven networks are driven; five refuse for a stated reason.** X has its own
+  adapter; LinkedIn, Facebook, Threads, Bluesky, Mastodon and Tumblr run through
+  the shared composer flow in `src/publisher/compose-driver.ts` (probe the page,
+  open the composer, type, submit, wait for the network's confirmation).
+  Instagram, TikTok, YouTube and Pinterest refuse because a post there needs an
+  image or video and a draft carries text; Reddit refuses because it needs a
+  community and a title the draft model does not carry. A refusal names its
+  reason and points at the workspace tab; the draft stays approved.
+  *Unverified:* the six shared-composer adapters have not been run against a
+  real signed-in account. Selector drift surfaces as a loud failure, never as a
+  phantom post, but each deserves one real post before it is trusted.
 - **Ambiguous outcomes never look like success.** If the post was submitted but
   no confirmation arrived within the deadline, the shell answers `409` and
   records the key as spent, so a retry replays that answer instead of risking a
@@ -250,7 +257,8 @@ token and no headless impersonation anywhere in this path.
 Typed in `artifacts/ua-social-browser/src/lib/shell-bridge.ts`:
 
 - `attachSurface(container, options)` — mounts a workspace-isolated Chromium view
-- `openInWorkspaceTab(workspaceId, url)` — opens a normal tab in that workspace
+- `openInWorkspaceTab(workspaceId, url)` — opens that workspace's tab, or steers
+  the one it already has: one tab per workspace, never two views of one session
 - `getSessionStatus(workspaceId)` — reports whether that session is signed in
 
 ### Session bridge (HTTP contract)
@@ -258,12 +266,16 @@ Typed in `artifacts/ua-social-browser/src/lib/shell-bridge.ts`:
 The shell listens on loopback; the API server calls it. Consumed by
 `artifacts/api-server/src/lib/session-bridge.ts`.
 
-Every request carries `X-UA-Shell-Token`; without it, both routes answer `401`
-with a `detail` and nothing else happens.
+Every request carries `X-UA-Shell-Token`; without it, every route answers `401`
+with a `detail` and nothing else happens — including the sign-in route, because
+opening a tab in the operator's browser is a real side effect, not a read.
 
 ```
 GET /session/:workspaceId
   200 { authenticated: boolean, accountHandle?: string, detail?: string }
+
+POST /signin/:workspaceId
+  200 { opened: boolean, alreadySignedIn: boolean, detail: string }
 
 POST /publish
   body { workspaceId, draftId, platform, body, idempotencyKey }
@@ -330,6 +342,29 @@ URLs in `artifacts/ua-social-browser/src/lib/platforms.ts`. Adding a network
 means adding an entry there and to the `platform` enum in
 `lib/api-spec/openapi.yaml`, then re-running codegen.
 
+### Signing in (FaceMask)
+
+Accounts are authenticated live, by the operator, inside the shell. `POST
+/api/session/signin` asks the shell to open the network's own login page in that
+workspace's tab, under the workspace's partition and UA profile. The login view
+gets no preload, so the page cannot see this app; the app in turn never reads,
+fills, or stores what is typed there, and mints no token of its own. The cookie
+the network sets in that partition is the whole of the account.
+
+The response says what happened to the *tab*, not to the account:
+
+```
+POST /api/session/signin  { workspaceId }
+  200 { workspaceId, bridgeAvailable, opened, alreadySignedIn, detail }
+  400 { error: "workspaceId is required" }
+```
+
+`opened: true` means a login page is now in front of the operator. Whether they
+finished — a human sign-in takes minutes and often a second factor — is answered
+only by `GET /api/session/status` reading the session back, which is what the
+workspace UI polls after opening one. On the web surface, `bridgeAvailable` is
+`false` and the detail says so: there is no session out there to sign into.
+
 Live network views render only inside the native shell. X, Instagram, and the
 rest send frame-blocking headers, so the web surface shows an explicit "runs in
 the desktop shell" state and an open-in-tab link rather than a fake feed.
@@ -361,6 +396,12 @@ it is marked external in `artifacts/api-server/build.mjs`. Bundling it produces
       right workspace and UA profile in each
 - [ ] Desktop build only: `curl` the API server's port directly and confirm it
       answers `401`, and that it is not reachable from another machine
-- [ ] Approve → post round-trip verified against one real account per network
+- [ ] Sign-in verified live: "Sign in" opens the network's own login page in
+      that workspace's tab, a second click focuses the same tab rather than
+      opening another, and the session badge flips only after the account is
+      actually signed in
+- [ ] Approve → post round-trip verified against one real account per network —
+      required before any shared-composer adapter (LinkedIn, Facebook, Threads,
+      Bluesky, Mastodon, Tumblr) is described as working
 - [ ] Approval revocation verified: editing an approved draft clears the sign-off
 - [ ] `NEDB_DATA_DIR` backed up

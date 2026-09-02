@@ -49,6 +49,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionStatus"
+  /session/signin:
+    post:
+      operationId: beginSignIn
+      tags: [publish]
+      summary: Open a live sign-in for a workspace inside the desktop shell
+      description: >-
+        Opens the network's own login page in this workspace's tab, under the
+        workspace's isolated session and UA profile. Credentials are typed into
+        the network's page: this app never sees, fills, or stores them, and no
+        API token is minted anywhere. Returns as soon as the tab is up, because
+        a human sign-in takes minutes and may involve a second factor. Whether
+        the operator finished is answered by GET /session/status reading the
+        session back — never by this call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignInRequest"
+      responses:
+        "200":
+          description: What happened when a sign-in was requested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignInInvitation"
+        "400":
+          description: workspaceId is missing
   /publish:
     post:
       operationId: publishPost
@@ -248,6 +276,31 @@ components:
           description: True when the workspace session is signed in to the platform
         accountHandle:
           type: string
+        detail:
+          type: string
+    SignInRequest:
+      type: object
+      required: [workspaceId]
+      properties:
+        workspaceId:
+          type: string
+    SignInInvitation:
+      type: object
+      required: [workspaceId, bridgeAvailable, opened, alreadySignedIn, detail]
+      properties:
+        workspaceId:
+          type: string
+        bridgeAvailable:
+          type: boolean
+          description: True when the native browser session bridge is reachable
+        opened:
+          type: boolean
+          description: True when a sign-in tab is now in front of the operator
+        alreadySignedIn:
+          type: boolean
+          description: >-
+            True when the workspace already had a session, so no tab was needed.
+            Never a claim about a sign-in that just happened.
         detail:
           type: string
     Approval:

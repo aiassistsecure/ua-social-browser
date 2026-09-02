@@ -99,7 +99,21 @@ async function bootstrap(): Promise<void> {
     () => apiAccessToken,
   );
   const ledger = new IdempotencyLedger(path.join(config.userDataDir, "publish-ledger.json"));
-  const publisher = createPublisher({ directory, ledger });
+  // The publisher is built before the window exists, but it only reaches for a
+  // tab when an operator asks to sign in — long after startup.
+  let shellWindow: ShellWindow | null = null;
+  const publisher = createPublisher({
+    directory,
+    ledger,
+    tabs: {
+      async openOrFocus(workspaceId: string, url: string) {
+        if (!shellWindow) {
+          throw new Error("The shell window is not up yet, so there is no tab to sign in through.");
+        }
+        await shellWindow.openOrFocusTab(workspaceId, url);
+      },
+    },
+  });
 
   // 1. The publisher endpoint, before anything that might want to call it.
   //    Its capability token is minted here and never leaves this process
@@ -172,6 +186,8 @@ async function bootstrap(): Promise<void> {
     toolbarHtml: path.join(dist, "toolbar.html"),
     directory,
   });
+
+  shellWindow = window;
 
   registerBridgeIpc(window, publisher.sessionStatus);
 
@@ -264,7 +280,7 @@ function registerBridgeIpc(
     CHANNELS.tabOpen,
     async (event, payload: { workspaceId: string; url: string }) => {
       privileged(event);
-      await window.openTab(payload.workspaceId, payload.url);
+      await window.openOrFocusTab(payload.workspaceId, payload.url);
     },
   );
 

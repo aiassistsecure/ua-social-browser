@@ -23,5 +23,7 @@ export * from './publishRequestPlatform';
 export * from './publishResult';
 export * from './publishResultStatus';
 export * from './sessionStatus';
+export * from './signInInvitation';
+export * from './signInRequest';
 export * from './tenantInfo';
 export * from './tenantInfoMode';

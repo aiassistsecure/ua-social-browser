@@ -15,11 +15,16 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+// The shell binds this to loopback: a process holding the publishing
+// capability has no business being reachable from the LAN. Replit needs the
+// default (all interfaces) so its proxy can reach the artifact.
+const host = process.env["HOST"]?.trim() || "0.0.0.0";
+
+app.listen(port, host, (err?: Error) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
   }
 
-  logger.info({ port }, "Server listening");
+  logger.info({ port, host }, "Server listening");
 });

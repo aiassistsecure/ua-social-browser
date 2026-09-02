@@ -8,9 +8,12 @@
  * privileged IPC endpoint.
  *
  * The native shell exposes the endpoint on loopback and hands its address to
- * the API server through UA_SESSION_BRIDGE_URL. When that variable is absent
- * (for example, when the web development surface runs on its own), publishing
- * reports "unavailable" instead of pretending to post.
+ * the API server through UA_SESSION_BRIDGE_URL, together with a capability
+ * token in UA_SESSION_BRIDGE_TOKEN. Both are required: loopback is not a
+ * privilege boundary, so the shell refuses any bridge call that does not carry
+ * the token it minted at startup. When either variable is absent (for example,
+ * when the web development surface runs on its own), publishing reports
+ * "unavailable" instead of pretending to post.
  */
 
 export type BridgeStatus = {
@@ -37,13 +40,29 @@ export type BridgePublishOutcome =
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
+/** Header the shell requires on every bridge call. */
+const BRIDGE_TOKEN_HEADER = "X-UA-Shell-Token";
+
 function bridgeUrl(): string | null {
   const raw = process.env.UA_SESSION_BRIDGE_URL?.trim();
   return raw ? raw.replace(/\/+$/, "") : null;
 }
 
+function bridgeToken(): string | null {
+  const raw = process.env.UA_SESSION_BRIDGE_TOKEN?.trim();
+  return raw ? raw : null;
+}
+
 export function isBridgeConfigured(): boolean {
-  return bridgeUrl() !== null;
+  return bridgeUrl() !== null && bridgeToken() !== null;
+}
+
+/** Says which half of the pairing is missing, so nobody debugs this blind. */
+function unavailableDetail(): string {
+  if (bridgeUrl() === null) {
+    return "Publishing requires the desktop shell. The web surface has no access to your authenticated platform session.";
+  }
+  return "A session bridge address is set but its capability token is missing, so the shell will refuse every call. Start the API server from the shell, or pair it with UA_SESSION_BRIDGE_TOKEN.";
 }
 
 async function callBridge(
@@ -51,7 +70,8 @@ async function callBridge(
   init: RequestInit,
 ): Promise<{ ok: boolean; status: number; payload: unknown }> {
   const base = bridgeUrl();
-  if (!base) {
+  const token = bridgeToken();
+  if (!base || !token) {
     throw new Error("Session bridge is not configured");
   }
 
@@ -64,6 +84,7 @@ async function callBridge(
       signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
+        [BRIDGE_TOKEN_HEADER]: token,
         ...(init.headers ?? {}),
       },
     });
@@ -84,7 +105,9 @@ export async function readSessionStatus(
       bridgeAvailable: false,
       authenticated: false,
       detail:
-        "No native session bridge attached. Posting is only possible from the desktop shell, where your own signed-in session lives.",
+        bridgeUrl() === null
+          ? "No native session bridge attached. Posting is only possible from the desktop shell, where your own signed-in session lives."
+          : unavailableDetail(),
     };
   }
 
@@ -137,11 +160,7 @@ export async function publishThroughSession(
   input: BridgePublishInput,
 ): Promise<BridgePublishOutcome> {
   if (!isBridgeConfigured()) {
-    return {
-      kind: "unavailable",
-      detail:
-        "Publishing requires the desktop shell. The web surface has no access to your authenticated platform session.",
-    };
+    return { kind: "unavailable", detail: unavailableDetail() };
   }
 
   try {

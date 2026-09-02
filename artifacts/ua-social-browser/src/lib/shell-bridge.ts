@@ -18,8 +18,6 @@ export type ShellSessionStatus = {
 
 export type ShellSurfaceOptions = {
   workspaceId: string;
-  /** Partition key: one isolated cookie/storage jar per workspace. */
-  partition: string;
   url: string;
   userAgent: string;
   acceptLanguage: string;
@@ -29,6 +27,12 @@ export type ShellSurfaceOptions = {
 
 export type ShellSurfaceHandle = {
   id: string;
+  /**
+   * Partition key of the cookie/storage jar this surface was given. Derived by
+   * the shell from the workspace id — this page cannot choose it, and must not
+   * try to reconstruct it, or the two can disagree about which jar is in use.
+   */
+  partition: string;
   navigate(url: string): Promise<void>;
   reload(): Promise<void>;
   close(): Promise<void>;

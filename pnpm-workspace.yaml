@@ -36,6 +36,7 @@ minimumReleaseAgeExclude:
 
 packages:
   - artifacts/*
+  - desktop/*
   - lib/*
   - lib/integrations/*
   - scripts

@@ -30,6 +30,7 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
     'idle' | 'mounting' | 'mounted' | 'unavailable'
   >('idle');
   const [surfaceError, setSurfaceError] = useState<string | null>(null);
+  const [partition, setPartition] = useState<string | null>(null);
   const [quickNote, setQuickNote] = useState('');
 
   const network = platformProfile(workspace.platform);
@@ -45,6 +46,7 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
     }
 
     let handle: { close(): Promise<void> } | null = null;
+    setPartition(null);
     let cancelled = false;
     setSurfaceState('mounting');
     setSurfaceError(null);
@@ -52,7 +54,6 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
     shell
       .attachSurface(container, {
         workspaceId: workspace.id,
-        partition: `persist:ua-${workspace.id}`,
         url: network.feedUrl,
         userAgent: profile.userAgent,
         acceptLanguage: profile.locale,
@@ -65,6 +66,9 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
           return;
         }
         handle = mounted;
+        // The shell owns the partition; report what it actually used rather
+        // than guessing at a key this page cannot derive.
+        setPartition(mounted.partition);
         setSurfaceState('mounted');
       })
       .catch((error: unknown) => {
@@ -210,7 +214,9 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
             {network.feedUrl}
           </CardTitle>
           <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-            partition: persist:ua-{workspace.id}
+            {partition
+              ? `partition: ${partition}`
+              : 'isolated session per workspace'}
           </span>
         </CardHeader>
 

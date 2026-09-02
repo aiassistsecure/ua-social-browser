@@ -1,0 +1,306 @@
+/**
+ * The loopback publisher endpoint.
+ *
+ * This is the server half of the contract consumed by
+ * `artifacts/api-server/src/lib/session-bridge.ts` and documented in
+ * DEPLOY.md section 5:
+ *
+ *   GET  /session/:workspaceId  200 { authenticated, accountHandle?, detail? }
+ *   POST /publish               200 { postUrl?, postId? }
+ *                               401 { detail }  -> "session not signed in"
+ *                               4xx/5xx { detail } -> "the platform rejected it"
+ *
+ * It binds to 127.0.0.1 only. The API server is handed its address through
+ * UA_SESSION_BRIDGE_URL; with no address, the API server reports publishing as
+ * unavailable rather than pretending to post.
+ *
+ * ## Why loopback is not enough
+ *
+ * This endpoint reaches the operator's own signed-in sessions, and the human
+ * approval that gates publishing is enforced in the API server — a caller that
+ * could reach the bridge directly would be posting with no approval at all.
+ * Every other local process, and every browser page the operator visits, can
+ * also talk to 127.0.0.1. So the bridge requires a capability token that the
+ * shell generates at startup and gives only to the API server it trusts;
+ * requests without it are refused before the publisher is ever consulted.
+ *
+ * The token travels in a custom header, which also means a browser cannot send
+ * it: any cross-origin attempt is either blocked by CORS preflight (which this
+ * server never approves) or arrives without the header and is refused.
+ *
+ * Deliberately free of Electron imports so the contract can be tested with a
+ * stub publisher under plain Node.
+ */
+
+import http from "node:http";
+import { createHash, timingSafeEqual } from "node:crypto";
+import type { AddressInfo } from "node:net";
+
+/** Header carrying the shell's capability token. */
+export const BRIDGE_TOKEN_HEADER = "x-ua-shell-token";
+
+export type SessionSnapshot = {
+  authenticated: boolean;
+  accountHandle?: string;
+  detail: string;
+};
+
+export type PublishRequestInput = {
+  workspaceId: string;
+  draftId: string;
+  platform: string;
+  body: string;
+  idempotencyKey: string;
+};
+
+export type PublishOutcome =
+  | { kind: "published"; postUrl?: string; postId?: string; detail?: string }
+  | { kind: "unauthenticated"; detail: string }
+  | { kind: "rejected"; detail: string; status?: number };
+
+export type PublisherPort = {
+  sessionStatus(workspaceId: string): Promise<SessionSnapshot>;
+  publish(input: PublishRequestInput): Promise<PublishOutcome>;
+};
+
+export type BridgeLogger = {
+  info(msg: string, fields?: Record<string, unknown>): void;
+  warn(msg: string, fields?: Record<string, unknown>): void;
+  error(msg: string, fields?: Record<string, unknown>): void;
+};
+
+export type SessionBridgeHandle = {
+  url: string;
+  port: number;
+  close(): Promise<void>;
+};
+
+const MAX_BODY_BYTES = 512 * 1024;
+
+/**
+ * Compares tokens without leaking their contents through timing. Both sides are
+ * hashed first so the comparison is fixed-length whatever was sent.
+ */
+export function tokenMatches(expected: string, provided: unknown): boolean {
+  if (typeof provided !== "string" || provided === "") return false;
+  const a = createHash("sha256").update(expected).digest();
+  const b = createHash("sha256").update(provided).digest();
+  return timingSafeEqual(a, b);
+}
+
+function sendJson(
+  response: http.ServerResponse,
+  status: number,
+  payload: unknown,
+): void {
+  const body = JSON.stringify(payload);
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store",
+  });
+  response.end(body);
+}
+
+function readBody(request: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error("Request body is too large"));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    request.on("error", reject);
+  });
+}
+
+function parsePublishInput(raw: unknown): PublishRequestInput | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Record<string, unknown>;
+
+  const fields = [
+    "workspaceId",
+    "draftId",
+    "platform",
+    "body",
+    "idempotencyKey",
+  ] as const;
+
+  for (const field of fields) {
+    if (typeof value[field] !== "string" || (value[field] as string).trim() === "") {
+      return null;
+    }
+  }
+
+  return {
+    workspaceId: value.workspaceId as string,
+    draftId: value.draftId as string,
+    platform: value.platform as string,
+    body: value.body as string,
+    idempotencyKey: value.idempotencyKey as string,
+  };
+}
+
+/** Maps a publish outcome onto the HTTP shape the API server expects. */
+export function statusForOutcome(outcome: PublishOutcome): number {
+  switch (outcome.kind) {
+    case "published":
+      return 200;
+    case "unauthenticated":
+      return 401;
+    case "rejected":
+      return outcome.status ?? 502;
+  }
+}
+
+export async function startSessionBridge(options: {
+  publisher: PublisherPort;
+  /** Capability token the caller must present. Generated by the shell. */
+  token: string;
+  port?: number;
+  host?: string;
+  logger?: BridgeLogger;
+}): Promise<SessionBridgeHandle> {
+  const { publisher, token } = options;
+  const host = options.host ?? "127.0.0.1";
+  const logger = options.logger;
+
+  if (!token || token.length < 32) {
+    // A weak or missing token would make the endpoint effectively open, which
+    // is exactly the failure this guard exists to prevent.
+    throw new Error("The session bridge needs a capability token of at least 32 characters.");
+  }
+
+  const server = http.createServer((request, response) => {
+    void handle(request, response).catch((error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      logger?.error("Session bridge request failed", { detail });
+      if (!response.headersSent) sendJson(response, 500, { detail });
+      else response.end();
+    });
+  });
+
+  async function handle(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+  ): Promise<void> {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+
+    // Authorization first, before parsing, routing, or touching the publisher.
+    if (!tokenMatches(token, request.headers[BRIDGE_TOKEN_HEADER])) {
+      logger?.warn("Refused an unauthorized session bridge request", {
+        method: request.method,
+        path,
+        // Neither the expected nor the presented token is ever logged.
+        presentedToken: request.headers[BRIDGE_TOKEN_HEADER] ? "invalid" : "absent",
+      });
+      sendJson(response, 401, {
+        detail:
+          "This endpoint publishes through the operator's own sessions and requires the shell's capability token.",
+      });
+      return;
+    }
+
+    if (request.method === "GET" && path === "/health") {
+      sendJson(response, 200, { status: "ok" });
+      return;
+    }
+
+    const sessionMatch = /^\/session\/(.+)$/.exec(path);
+    if (request.method === "GET" && sessionMatch) {
+      const workspaceId = decodeURIComponent(sessionMatch[1] as string);
+      const snapshot = await publisher.sessionStatus(workspaceId);
+      sendJson(response, 200, {
+        authenticated: snapshot.authenticated,
+        accountHandle: snapshot.accountHandle,
+        detail: snapshot.detail,
+      });
+      return;
+    }
+
+    if (request.method === "POST" && path === "/publish") {
+      let parsed: unknown;
+      try {
+        const text = await readBody(request);
+        parsed = text ? JSON.parse(text) : null;
+      } catch (error) {
+        sendJson(response, 400, {
+          detail:
+            error instanceof Error
+              ? `Unreadable publish request: ${error.message}`
+              : "Unreadable publish request",
+        });
+        return;
+      }
+
+      const input = parsePublishInput(parsed);
+      if (!input) {
+        sendJson(response, 400, {
+          detail:
+            "A publish request needs workspaceId, draftId, platform, body and idempotencyKey.",
+        });
+        return;
+      }
+
+      const outcome = await publisher.publish(input);
+      const status = statusForOutcome(outcome);
+
+      logger?.info("Publish attempt finished", {
+        workspaceId: input.workspaceId,
+        draftId: input.draftId,
+        platform: input.platform,
+        outcome: outcome.kind,
+        status,
+      });
+
+      if (outcome.kind === "published") {
+        sendJson(response, 200, {
+          postUrl: outcome.postUrl,
+          postId: outcome.postId,
+          detail: outcome.detail,
+        });
+        return;
+      }
+
+      sendJson(response, status, { detail: outcome.detail });
+      return;
+    }
+
+    sendJson(response, 404, { detail: `No bridge route for ${request.method} ${path}` });
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(options.port ?? 0, host, () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address() as AddressInfo;
+  const url = `http://${host}:${address.port}`;
+  logger?.info("Session bridge listening", { url });
+
+  return {
+    url,
+    port: address.port,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        // Shutdown can be reached from both a quit and an error path.
+        if (!server.listening) {
+          resolve();
+          return;
+        }
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      }),
+  };
+}

@@ -5,7 +5,7 @@ This project has two halves that ship on different tracks:
 | Half | What it is | Where it runs |
 | --- | --- | --- |
 | **Workspace surface** (`artifacts/ua-social-browser`, `artifacts/api-server`) | The sidebar UI, the AI endpoints, the review queue, the ledger | Replit today; embedded in the desktop shell in production |
-| **Native shell** | A Chromium fork with per-workspace session isolation, UA profiles, and the session bridge | Built and signed on your own machines |
+| **Native shell** (`desktop/ua-shell`) | A Chromium desktop browser with per-workspace session isolation, UA profiles, and the session bridge | Built and signed on your own machines |
 
 The Replit artifact is the **development surface** for the shared UI and API. It is
 not the shipped product, and it deliberately cannot post to any network — see
@@ -17,7 +17,12 @@ not the shipped product, and it deliberately cannot post to any network — see
 
 - Node 24 and pnpm (already provisioned in the Replit container)
 - `AIAssIST_API_KEY` — set as a Replit Secret; it never leaves the API server
-- For the native shell: `depot_tools`, ~100 GB free disk, 16 GB+ RAM
+- For the native shell: a desktop OS with a display. The shell is a Chromium
+  (Electron) application; it cannot run in the Replit container, which has no
+  GUI. Everything in it except the browser windows themselves — the session
+  bridge, the idempotency ledger, the UA/Client-Hints derivation, the privileged
+  origin — is covered by `pnpm --filter @workspace/ua-shell run test`, which does
+  run here.
 
 ## 2. Environment variables
 
@@ -27,7 +32,24 @@ not the shipped product, and it deliberately cannot post to any network — see
 | `PORT` | injected | `8080` | Assigned per artifact by Replit. Never hard-code it. |
 | `NEDB_DATA_DIR` | no | `<cwd>/.data/ua-social-browser` | Append-only ledger location. Point it at a persistent volume in the desktop build. |
 | `UA_SESSION_BRIDGE_URL` | no | unset | Loopback address of the native shell's publisher IPC endpoint. **Unset means publishing is disabled.** |
+| `UA_SESSION_BRIDGE_TOKEN` | with the above | unset | Capability token the shell mints at startup. The shell refuses every bridge call without it, so an address on its own also means publishing is disabled. Set by the shell for the API server it starts; never commit it. |
+| `UA_API_ACCESS_TOKEN` | in the shell | unset | When set, every `/api` request must present it in `X-UA-Api-Token` and CORS is switched off entirely. The shell mints one for the API server it starts, and reads this variable to pair with an API server you run yourself. Unset on the web surface, which holds no publishing capability. |
+| `HOST` | no | `0.0.0.0` | Interface to bind. The shell sets `127.0.0.1`; Replit needs the default so its proxy can reach the artifact. |
 | `UA_TENANCY_MODE` | no | `single` | `single` scopes every document to the `personal` tenant. `multi` requires an auth layer to set `res.locals.tenantId` and returns 401 without one. |
+
+Read by the native shell only (`desktop/ua-shell`):
+
+| Variable | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `UA_WORKSPACE_UI_URL` | no | unset | Load the sidebar from a running dev server instead of the built bundle. Development only. |
+| `UA_WORKSPACE_UI_DIR` | no | `artifacts/ua-social-browser/dist/public` | Built sidebar to serve from the shell's privileged origin. |
+| `UA_API_SERVER_ENTRY` | no | `artifacts/api-server/dist/index.mjs` | API server bundle the shell spawns. |
+| `UA_API_SERVER_URL` | no | unset | Use an already-running API server instead of spawning one. That server only publishes if it was itself started with `UA_SESSION_BRIDGE_URL`. |
+| `UA_SHELL_BRIDGE_PORT` | no | `0` (OS-assigned) | Fix the session bridge port when an externally-run API server needs a stable `UA_SESSION_BRIDGE_URL`. |
+| `UA_SHELL_PAIRING_FILE` | no | unset | Path to write the bridge address **and its capability token** for an API server you start yourself. Owner-readable only, and off by default. Delete the file once the API server has read it. |
+
+The shell sets `UA_SESSION_BRIDGE_URL`, `UA_SESSION_BRIDGE_TOKEN`, `PORT` and
+`NEDB_DATA_DIR` for the API server it spawns; do not set those for it by hand.
 
 ## 3. Running the workspace surface
 
@@ -61,39 +83,146 @@ unset in that environment.
 The ledger writes to local disk, so an Autoscale deployment treats its store as
 ephemeral. Anything you want to keep lives on the desktop build.
 
-## 5. Building the native shell
+## 5. The native shell
+
+The shell lives in `desktop/ua-shell` and is a Chromium browser built on
+Electron, not a source-patched Chromium fork. Electron *is* Chromium: its
+`session.fromPartition('persist:ua-<workspaceId>')` is a real `BrowserContext`
+with its own on-disk profile directory, and CDP `Emulation.setUserAgentOverride`
+is the same mechanism a patched build would drive. A fork would add a multi-hour
+build and a permanent rebase burden for capabilities already exposed here.
+
+### Build and run
 
 ```bash
-# one-time
-git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-export PATH="$PATH:/path/to/depot_tools"
-mkdir chromium && cd chromium
-fetch --nohooks chromium && cd src
-./build/install-build-deps.sh
-gclient runhooks
+pnpm install
+
+# the two halves the shell hosts
+PORT=5173 BASE_PATH=/ pnpm --filter @workspace/ua-social-browser run build
+pnpm --filter @workspace/api-server run build
+
+pnpm --filter @workspace/ua-shell run start   # builds, then launches Electron
 ```
 
-Apply the workspace patches, then:
+The UI build needs `PORT` and `BASE_PATH=/`: its Vite config reads both, and the
+shell serves the bundle from the root of its own origin.
 
-```bash
-gn gen out/Release --args='is_debug=false is_official_build=true symbol_level=0 enable_nacl=false blink_symbol_level=0'
-autoninja -C out/Release chrome
-```
+`pnpm --filter @workspace/ua-shell run test` runs the shell's own suite: the
+bridge contract, the idempotency ledger, UA/Client-Hints derivation, the
+privileged origin's gate, and workspace-directory parsing. None of it needs a
+display.
 
-### What the patches must provide
+### What it provides
 
-1. **Workspace isolation** — one `BrowserContext` per workspace, backed by its own
-   on-disk profile directory and cookie jar (`persist:ua-<workspaceId>`). No
-   sharing of storage, service workers, or cache between workspaces.
-2. **UA profile application** — per-context `User-Agent`, `Accept-Language`,
-   timezone override, and Client Hints (`Sec-CH-UA*`) that agree with the UA
-   string. A mismatched pair is more identifying than no override at all.
-3. **Toolbar indicator** — the active workspace name and UA profile stay visible
-   in the browser chrome. The operator must always know which identity is live.
-4. **Privileged sidebar** — the workspace UI loads as a WebUI page with
-   `window.uaShell` injected. Ordinary page content never receives that object.
-5. **Publisher IPC** — the endpoint described below, bound to loopback, that the
-   API server reaches through `UA_SESSION_BRIDGE_URL`.
+1. **Workspace isolation** — `src/partition.ts` and `src/workspace-contexts.ts`.
+   One partition per workspace, stored under `<userData>/Partitions/`: separate
+   cookies, storage, service workers, and cache. The key is
+   `persist:ua-<readable>-<digest>`, where the readable part is the sanitised
+   workspace id and the digest is taken from the *raw* id — sanitising alone
+   would let `team/a` and `team-a` land in one cookie jar, which is a
+   cross-account session leak. The main process derives the key; the workspace
+   UI is told which partition it got and never reconstructs one.
+2. **UA profile application** — `src/ua-metadata.ts`, applied in
+   `workspace-contexts.ts`. Per-context `User-Agent` and `Accept-Language` on the
+   session (so subresources match), plus `Emulation.setUserAgentOverride` with
+   `userAgentMetadata` and `Emulation.setTimezoneOverride` per view (so
+   `navigator.userAgentData`, `Date`, and `Intl` agree with the headers). Every
+   `Sec-CH-UA*` value is derived from the UA string itself, and a non-Chromium UA
+   emits no client hints at all — Safari and Firefox do not send them, and
+   inventing them would be a tell.
+   *Known limit:* a UA string cannot distinguish Windows 10 from 11, and Chrome
+   freezes macOS at `10_15_7`. The hints report what the UA says rather than
+   inventing a plausible platform version.
+3. **Toolbar indicator** — `src/renderer/toolbar.ts`. The workspace name, the UA
+   profile name and label ("Chrome 131 · macOS"), and the timezone stay visible
+   whatever is on screen, alongside the workspace tabs.
+4. **Privileged sidebar** — `src/ui-server.ts` + `src/preload/`. The workspace UI
+   is served from a loopback origin that also proxies `/api` to the API server,
+   so the shared UI's relative fetches work unchanged. That origin is gated by a
+   random cookie set only in the privileged view's session. That one view gets a
+   preload that installs `window.uaShell`; workspace surfaces, workspace tabs,
+   and the hidden publish window get **no preload at all**, so page content has
+   no bridge, no IPC, and no route to the API. The main process also rejects any
+   bridge IPC that does not come from the privileged view, and blocks that view
+   from navigating off its own origin.
+5. **Publisher endpoint** — `src/session-bridge-server.ts`, bound to 127.0.0.1
+   and gated by a capability token. The shell starts it *before* the API server
+   and passes its address and token as `UA_SESSION_BRIDGE_URL` and
+   `UA_SESSION_BRIDGE_TOKEN`, which is the only way an API server ever gets
+   either.
+
+### The bridge is not "protected by loopback"
+
+The human approval that gates publishing is enforced in the API server. Anything
+that can call the bridge directly posts through the operator's live sessions
+with no approval at all — and every other process on the machine can reach
+127.0.0.1. So the shell mints a 256-bit token at startup and refuses any bridge
+request that does not carry it in `X-UA-Shell-Token`, before parsing the body
+and before the publisher is consulted. Because it is a custom header, a web page
+cannot send it either: cross-origin requests either fail preflight (never
+approved here) or arrive without it.
+
+The token is never logged and has no default on-disk location. To pair an API
+server you start yourself, launch the shell with `UA_SHELL_PAIRING_FILE=/path`;
+it creates that file exclusively and owner-only (`0600`), and warns that the
+file is a live capability. Delete it after use. An existing file or a symlink at
+that path is refused rather than written through — anything already there could
+be someone else's, and the contents can publish through your sessions.
+
+### Nor is the API server behind it
+
+The API server the shell starts inherits that capability, so reaching *it* is as
+good as reaching the bridge. Three things close that path:
+
+- it binds `127.0.0.1`, so nothing on the LAN can see it;
+- it requires `UA_API_ACCESS_TOKEN` in `X-UA-Api-Token` on every `/api` request,
+  and the shell's UI proxy is the only holder — an inbound copy of that header
+  is dropped and replaced, so a caller cannot supply its own;
+- with the token configured, CORS is off, so no page can call it cross-origin.
+
+Everything inside the shell that talks to the API carries the token: the UI
+proxy and the workspace directory the toolbar and publisher read from.
+
+If you point the shell at your own API server with `UA_API_SERVER_URL`, that
+server receives the bridge capability, so gating it is **required**, not
+advisory:
+
+- run it with `HOST=127.0.0.1` and a `UA_API_ACCESS_TOKEN`;
+- start the shell with the same `UA_API_ACCESS_TOKEN`.
+
+Without it the shell refuses to start and tells you why. It will not open the
+privileged UI or the bridge onto an ungated API server.
+
+### Approval is read, not asserted
+
+`POST /api/publish` no longer believes the `approval` block in the request —
+whoever sends the request writes those fields. It loads the draft from the
+ledger and requires that it is there, that a person signed it off, that the
+workspace and network match, and that the submitted text is *exactly* the
+approved text. An approved draft id is not a licence to post something else.
+
+### How a post goes out
+
+`src/publisher/`. The shell opens the network's composer in a hidden window
+inside that workspace's own partition and UA profile, types the approved body,
+submits, and waits for the network's own confirmation. Same cookies, same
+profile, same session the operator sees in the workspace tab — there is no API
+token and no headless impersonation anywhere in this path.
+
+- **Session detection** covers all twelve networks by cookie. Bluesky and
+  Mastodon report "cannot tell from cookies" instead of guessing: Bluesky keeps
+  its session in local storage, and a Mastodon session belongs to whichever
+  instance the workspace uses.
+- **Automated submission is implemented for X only.** Every other network
+  answers `501` with an explicit "open the workspace tab and post there"; the
+  draft stays approved. Adding a network means one adapter in
+  `src/publisher/adapters.ts`.
+- **Ambiguous outcomes never look like success.** If the post was submitted but
+  no confirmation arrived within the deadline, the shell answers `409` and
+  records the key as spent, so a retry replays that answer instead of risking a
+  duplicate. The operator checks the account; the shell does not guess.
+- The publish attempt is bounded at 17s so the shell — not the API server's 20s
+  timeout — decides what an unfinished attempt means.
 
 ### `window.uaShell` (renderer contract)
 
@@ -108,6 +237,9 @@ Typed in `artifacts/ua-social-browser/src/lib/shell-bridge.ts`:
 The shell listens on loopback; the API server calls it. Consumed by
 `artifacts/api-server/src/lib/session-bridge.ts`.
 
+Every request carries `X-UA-Shell-Token`; without it, both routes answer `401`
+with a `detail` and nothing else happens.
+
 ```
 GET /session/:workspaceId
   200 { authenticated: boolean, accountHandle?: string, detail?: string }
@@ -120,7 +252,10 @@ POST /publish
 ```
 
 `idempotencyKey` is derived from the draft id plus its approval timestamp, so a
-retry after a network stall cannot double-post.
+retry after a network stall cannot double-post. The shell keeps the spent keys in
+`<userData>/publish-ledger.json` and records only terminal results: a post that
+went out, and a post whose outcome could not be confirmed. "Not signed in" is not
+terminal — the operator signs in and the same approved draft goes out.
 
 ## 6. Why publishing fails on the web surface
 
@@ -157,9 +292,17 @@ it is marked external in `artifacts/api-server/build.mjs`. Bundling it produces
 ## 9. Release checklist
 
 - [ ] `pnpm run typecheck` clean
+- [ ] `pnpm --filter @workspace/ua-shell run test` green
 - [ ] `pnpm --filter @workspace/api-spec run codegen` re-run after any spec edit
 - [ ] `AIAssIST_API_KEY` present in the target environment
-- [ ] `UA_SESSION_BRIDGE_URL` set in desktop builds, unset elsewhere
+- [ ] `UA_SESSION_BRIDGE_URL` / `UA_SESSION_BRIDGE_TOKEN` unset on the web
+      surface; on the desktop build, confirmed to be set by the shell rather
+      than by hand, and no pairing file left behind
+- [ ] Shell launched once per release: two workspaces signed into the same
+      network stay signed in as different accounts, and the toolbar names the
+      right workspace and UA profile in each
+- [ ] Desktop build only: `curl` the API server's port directly and confirm it
+      answers `401`, and that it is not reachable from another machine
 - [ ] Approve → post round-trip verified against one real account per network
 - [ ] Approval revocation verified: editing an approved draft clears the sign-off
 - [ ] `NEDB_DATA_DIR` backed up

@@ -133,8 +133,42 @@ export function identityFrom(input: {
 }
 
 /**
- * Applies the UA profile to a single view. Must run before the first
- * navigation: the override is what the initial request carries.
+ * How long to wait for the CDP overrides before getting on with the
+ * navigation. A view that has never loaded anything has no renderer yet, and
+ * these commands are answered by the renderer — so on a fresh view they can
+ * sit unanswered until something loads. Waiting on them before loading is a
+ * deadlock, and its symptom is the worst one this app has: a tab that shows a
+ * black rectangle forever and explains nothing.
+ */
+const EMULATION_DEADLINE_MS = 1_500;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function sendOverrides(
+  contents: WebContents,
+  identity: WorkspaceIdentity,
+  hints: UserAgentMetadata | null,
+): Promise<void> {
+  await contents.debugger.sendCommand("Emulation.setUserAgentOverride", {
+    userAgent: identity.userAgent,
+    acceptLanguage: identity.acceptLanguage,
+    platform: hints?.platform ?? "",
+    // Omitted entirely for non-Chromium UA strings: a Safari UA that also
+    // answers getHighEntropyValues() would be a giveaway.
+    ...(hints ? { userAgentMetadata: hints } : {}),
+  });
+
+  await contents.debugger.sendCommand("Emulation.setTimezoneOverride", {
+    timezoneId: identity.timezone,
+  });
+}
+
+/**
+ * Applies the UA profile to a single view. Runs before the first navigation so
+ * the override is what the initial request carries — but never blocks it: the
+ * headers on that request come from the session anyway, and the parts that
+ * need a renderer (`navigator.userAgentData`, the timezone) are re-applied as
+ * soon as one exists.
  */
 export async function applyEmulation(
   contents: WebContents,
@@ -154,25 +188,32 @@ export async function applyEmulation(
     return;
   }
 
-  try {
-    await contents.debugger.sendCommand("Emulation.setUserAgentOverride", {
-      userAgent: identity.userAgent,
-      acceptLanguage: identity.acceptLanguage,
-      platform: hints?.platform ?? "",
-      // Omitted entirely for non-Chromium UA strings: a Safari UA that also
-      // answers getHighEntropyValues() would be a giveaway.
-      ...(hints ? { userAgentMetadata: hints } : {}),
-    });
+  const sent = sendOverrides(contents, identity, hints).then(
+    () => "sent" as const,
+    (error: unknown) => {
+      log.error("UA emulation failed", {
+        workspaceId: identity.workspaceId,
+        ...errorFields(error),
+      });
+      return "failed" as const;
+    },
+  );
 
-    await contents.debugger.sendCommand("Emulation.setTimezoneOverride", {
-      timezoneId: identity.timezone,
+  const outcome = await Promise.race([sent, sleep(EMULATION_DEADLINE_MS).then(() => "slow" as const)]);
+  if (outcome !== "slow") return;
+
+  log.warn("UA emulation is still pending; loading anyway and re-applying once the page is up", {
+    workspaceId: identity.workspaceId,
+  });
+
+  contents.once("dom-ready", () => {
+    void sendOverrides(contents, identity, hints).catch((error: unknown) => {
+      log.error("UA emulation failed on retry", {
+        workspaceId: identity.workspaceId,
+        ...errorFields(error),
+      });
     });
-  } catch (error) {
-    log.error("UA emulation failed", {
-      workspaceId: identity.workspaceId,
-      ...errorFields(error),
-    });
-  }
+  });
 }
 
 export function detachEmulation(contents: WebContents): void {

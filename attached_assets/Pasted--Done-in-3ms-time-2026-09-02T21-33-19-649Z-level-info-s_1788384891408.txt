@@ -1,0 +1,46 @@
+⚡ Done in 3ms
+{"time":"2026-09-02T21:33:19.649Z","level":"info","scope":"bridge","msg":"Session bridge listening","url":"http://127.0.0.1:59204"}
+  [nedbd] warm start — seq=14 head=c4e5bb97... tip=1261226f...
+{"level":30,"time":1788384799942,"pid":23112,"hostname":"Marks-iMac.local","port":59205,"host":"127.0.0.1","msg":"Server listening"}
+{"level":30,"time":1788384799943,"pid":23112,"hostname":"Marks-iMac.local","intervalMs":30000,"bridgeConfigured":true,"msg":"Scheduler started"}
+{"time":"2026-09-02T21:33:19.994Z","level":"info","scope":"api-server","msg":"API server ready","baseUrl":"http://127.0.0.1:59205","bridgeUrl":"http://127.0.0.1:59204"}
+{"level":30,"time":1788384799991,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":1,"method":"GET","url":"/api/healthz"},"res":{"statusCode":200},"responseTime":4,"msg":"request completed"}
+{"level":30,"time":1788384800003,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":2,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":7,"msg":"request completed"}
+{"time":"2026-09-02T21:33:20.284Z","level":"info","scope":"main","msg":"Shell ready","workspaceUiUrl":"http://127.0.0.1:59209/","apiBaseUrl":"http://127.0.0.1:59205","bridgeUrl":"http://127.0.0.1:59204","profiles":"/Users/mtnero/Library/Application Support/@workspace/ua-shell/Partitions"}
+{"level":30,"time":1788384800611,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":3,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":9,"msg":"request completed"}
+{"level":30,"time":1788384800618,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":4,"method":"POST","url":"/api/schedule/outcomes"},"res":{"statusCode":200},"responseTime":6,"msg":"request completed"}
+{"level":30,"time":1788384805108,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":5,"method":"PUT","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":510,"msg":"request completed"}
+{"level":30,"time":1788384805291,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":6,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384808161,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":7,"method":"PUT","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":345,"msg":"request completed"}
+{"level":30,"time":1788384810291,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":8,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384812638,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":9,"method":"PUT","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":38,"msg":"request completed"}
+{"level":30,"time":1788384815293,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":10,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384815604,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":11,"method":"POST","url":"/api/schedule/outcomes"},"res":{"statusCode":200},"responseTime":0,"msg":"request completed"}
+{"level":30,"time":1788384820293,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":12,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":2,"msg":"request completed"}
+{"time":"2026-09-02T21:33:44.583Z","level":"info","scope":"contexts","msg":"Workspace context ready","workspaceId":"ws-x","partition":"persist:ua-ws-x-d6efc95857d8c00e","profileDir":"/Users/mtnero/Library/Application Support/@workspace/ua-shell/Partitions/ua-ws-x-d6efc95857d8c00e","clientHints":true}
+{"level":30,"time":1788384825346,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":14,"method":"PUT","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":460,"msg":"request completed"}
+{"level":30,"time":1788384825349,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":15,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384830294,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":16,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":2,"msg":"request completed"}
+{"level":30,"time":1788384830604,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":17,"method":"POST","url":"/api/schedule/outcomes"},"res":{"statusCode":200},"responseTime":0,"msg":"request completed"}
+{"level":30,"time":1788384835295,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":18,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384840295,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":19,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":2,"msg":"request completed"}
+{"level":30,"time":1788384844548,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":13,"method":"POST","url":"/api/session/signin"},"workspaceId":"ws-x","opened":false,"alreadySignedIn":false,"msg":"Live sign-in requested"}
+{"level":30,"time":1788384844549,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":13,"method":"POST","url":"/api/session/signin"},"res":{"statusCode":200},"responseTime":20007,"msg":"request completed"}
+{"level":30,"time":1788384845297,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":20,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384848412,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":21,"method":"POST","url":"/api/schedule/outcomes"},"res":{"statusCode":200},"responseTime":1,"msg":"request completed"}
+{"level":30,"time":1788384850297,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":22,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"time":"2026-09-02T21:34:10.796Z","level":"info","scope":"window","msg":"Workspace tab focused","workspaceId":"ws-x","url":"https://x.com/i/flow/login"}
+{"time":"2026-09-02T21:34:10.796Z","level":"info","scope":"publisher","msg":"Opened a live sign-in tab","workspaceId":"ws-x","platform":"x"}
+{"time":"2026-09-02T21:34:10.796Z","level":"info","scope":"bridge","msg":"Live sign-in requested","workspaceId":"ws-x","platform":"x","opened":true,"alreadySignedIn":false}
+{"level":30,"time":1788384850802,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":23,"method":"POST","url":"/api/session/signin"},"workspaceId":"ws-x","opened":true,"alreadySignedIn":false,"msg":"Live sign-in requested"}
+{"level":30,"time":1788384850803,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":23,"method":"POST","url":"/api/session/signin"},"res":{"statusCode":200},"responseTime":12,"msg":"request completed"}
+{"level":30,"time":1788384855297,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":24,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":2,"msg":"request completed"}
+{"level":30,"time":1788384860298,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":25,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384860840,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":26,"method":"GET","url":"/api/session/status"},"res":{"statusCode":200},"responseTime":4,"msg":"request completed"}
+{"level":30,"time":1788384860859,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":27,"method":"POST","url":"/api/schedule/outcomes"},"res":{"statusCode":200},"responseTime":0,"msg":"request completed"}
+{"level":30,"time":1788384862820,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":28,"method":"GET","url":"/api/session/status"},"res":{"statusCode":200},"responseTime":4,"msg":"request completed"}
+{"level":30,"time":1788384865300,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":29,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384870299,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":30,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":2,"msg":"request completed"}
+{"level":30,"time":1788384871694,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":31,"method":"GET","url":"/api/session/status"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{"level":30,"time":1788384875300,"pid":23112,"hostname":"Marks-iMac.local","req":{"id":32,"method":"GET","url":"/api/browser/state"},"res":{"statusCode":200},"responseTime":3,"msg":"request completed"}
+{

@@ -3,4 +3,5 @@
 - [Desktop shell architecture](desktop-shell-architecture.md) — the shell is Electron, not a patched Chromium fork, and the invariants that keep publishing honest.
 - [Native binaries vs linux-x64](cross-platform-native-binaries.md) — template install overrides that exclude darwin/win32 binaries break the desktop build; don't let them come back.
 - [Live in-shell sign-in](live-sign-in.md) — one tab per workspace, and an opened login tab is never evidence that an account is signed in.
+- [Blank tabs in the shell](blank-tab.md) — a view with no renderer can deadlock its own first load, and a black tab is the only symptom.
 - [Scheduled dispatch](scheduled-dispatch.md) — sending on a clock: one writer for the state document, one attempt per instruction, intent on disk before the network call.

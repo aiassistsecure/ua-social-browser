@@ -303,7 +303,18 @@ export class ShellWindow {
     if (!existing) return this.openTab(workspaceId, url);
 
     this.activeTabId = existing.id;
-    if (url && existing.url !== url) {
+
+    // What the tab is *showing*, not what it was once asked to show. A tab
+    // whose load never happened still remembers the URL it was created with,
+    // and comparing against that is how a blank tab gets focused forever
+    // instead of being loaded.
+    const showing = existing.view.webContents.getURL();
+    const shown = showing === "" ? null : safeOrigin(showing);
+    const sameSite = shown !== null && shown === safeOrigin(url);
+
+    // Already on the network: leave the page alone. Pressing sign-in twice
+    // must not reload a login form the operator is halfway through typing.
+    if (url && !sameSite) {
       existing.url = url;
       void existing.view.webContents.loadURL(url);
     }
@@ -377,6 +388,46 @@ export class ShellWindow {
     });
 
     contents.on("did-navigate", () => this.publishChromeState());
+
+    // A page that fails silently is indistinguishable from a dark-themed page
+    // that loaded fine, so every way a view can end up showing nothing is
+    // written down, and the main-frame failure is put on screen.
+    contents.on(
+      "did-fail-load",
+      (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        // -3 is ERR_ABORTED: a navigation the page itself replaced.
+        if (!isMainFrame || errorCode === -3) return;
+
+        log.error("A page failed to load", {
+          workspaceId: identity.workspaceId,
+          url: validatedURL,
+          errorCode,
+          errorDescription,
+        });
+
+        if (validatedURL.startsWith("data:")) return;
+        void contents.loadURL(failurePage(validatedURL, errorCode, errorDescription));
+      },
+    );
+
+    contents.on("render-process-gone", (_event, details) => {
+      log.error("A page's renderer died", {
+        workspaceId: identity.workspaceId,
+        url: contents.getURL(),
+        reason: details.reason,
+      });
+    });
+
+    contents.on("unresponsive", () => {
+      log.warn("A page stopped responding", {
+        workspaceId: identity.workspaceId,
+        url: contents.getURL(),
+      });
+    });
+
+    contents.on("did-finish-load", () => {
+      log.info("Page loaded", { workspaceId: identity.workspaceId, url: contents.getURL() });
+    });
   }
 
   private async identityForWorkspace(workspaceId: string): Promise<WorkspaceIdentity> {
@@ -486,6 +537,31 @@ function clampToContent(bounds: Rect, width: number, height: number): Rect {
     width: Math.max(0, Math.min(bounds.width, width - x)),
     height: Math.max(0, Math.min(bounds.height, height - y)),
   };
+}
+
+/**
+ * What a view shows when its page could not be fetched. Plain markup, no
+ * script, no preload — the same rules the network's own page runs under.
+ */
+function failurePage(url: string, errorCode: number, errorDescription: string): string {
+  const escape = (value: string) =>
+    value.replace(/[<>&"]/g, (character) =>
+      character === "<" ? "&lt;" : character === ">" ? "&gt;" : character === "&" ? "&amp;" : "&quot;",
+    );
+
+  const html = `<!doctype html>
+<meta charset="utf-8">
+<title>This page did not load</title>
+<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0b0b0f;color:#e7e7ea;font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+  <div style="max-width:34rem;padding:2rem">
+    <h1 style="margin:0 0 .5rem;font-size:1.1rem">This page did not load</h1>
+    <p style="margin:0 0 1rem;color:#9a9aa5">The workspace tab is fine; the request for this address failed. Nothing about your account changed.</p>
+    <p style="margin:0 0 .25rem;word-break:break-all">${escape(url)}</p>
+    <p style="margin:0;color:#9a9aa5">${escape(errorDescription)} (${errorCode})</p>
+  </div>
+</body>`;
+
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
 function safeOrigin(url: string): string | null {

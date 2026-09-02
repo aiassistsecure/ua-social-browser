@@ -338,6 +338,14 @@ multi-tenant auth layer.
   guard. Leave it on; use the exclude list if something is genuinely urgent.
 - **`nedb-engine` stays external** in the api-server esbuild bundle — bundling
   it breaks startup on a native binding.
+- **Nothing that needs a renderer may block a first load.** A fresh
+  `WebContentsView` has no renderer until something loads, so CDP
+  `Emulation.*` commands sent to it can sit unanswered. Awaiting them before
+  `loadURL` deadlocks the tab open, and the symptom is a black rectangle with
+  no error anywhere. `applyEmulation` is bounded and re-applies on `dom-ready`;
+  keep it that way. For the same reason, decide whether a tab needs loading
+  from `webContents.getURL()` — the URL a tab was *created with* says nothing
+  about whether the page ever arrived.
 - **`pnpm install` after pulling** if the lockfile moved, and delete
   `node_modules` if it was populated under the old lockfile.
 - **`scripts/post-merge.sh`** runs `pnpm --filter db push`, inherited from the

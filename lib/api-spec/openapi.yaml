@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: ai
+    description: AI-assisted social content operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /ai/models:
+    get:
+      operationId: listAiModels
+      tags: [ai]
+      summary: List available AiAssist models
+      responses:
+        "200":
+          description: Available models
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiModelList"
+  /ai/suggest:
+    post:
+      operationId: createAiSuggestion
+      tags: [ai]
+      summary: Generate social post suggestions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiSuggestionInput"
+      responses:
+        "200":
+          description: Generated suggestions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiSuggestionResult"
+        "400":
+          description: Invalid request
+        "502":
+          description: AiAssist request failed
 components:
   schemas:
     HealthStatus:
@@ -33,4 +69,90 @@ components:
           type: string
       required:
         - status
+    AiModel:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    AiModelList:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiModel"
+    AiSuggestionInput:
+      type: object
+      required: [platform, task, tone, audience, sourceText]
+      properties:
+        platform:
+          type: string
+          enum: [linkedin, x, instagram, facebook, threads]
+        task:
+          type: string
+          enum: [suggest, rewrite, shorten, expand, variants, hashtags]
+        tone:
+          type: string
+          minLength: 1
+          maxLength: 100
+        audience:
+          type: string
+          minLength: 1
+          maxLength: 200
+        sourceText:
+          type: string
+          minLength: 3
+          maxLength: 12000
+        model:
+          type: string
+        numberOfSuggestions:
+          type: number
+          minimum: 1
+          maximum: 4
+          default: 3
+        maxCharacters:
+          type: number
+          minimum: 40
+          maximum: 5000
+          default: 1300
+        includeHashtags:
+          type: boolean
+          default: true
+    AiSuggestion:
+      type: object
+      required: [text, rationale, characterCount]
+      properties:
+        text:
+          type: string
+        rationale:
+          type: string
+        characterCount:
+          type: number
+    AiUsage:
+      type: object
+      required: [inputTokens, outputTokens]
+      properties:
+        inputTokens:
+          type: number
+        outputTokens:
+          type: number
+    AiSuggestionResult:
+      type: object
+      required: [suggestions, model, usage, provider]
+      properties:
+        suggestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AiSuggestion"
+        model:
+          type: string
+        provider:
+          type: string
+          enum: [pin]
+        usage:
+          $ref: "#/components/schemas/AiUsage"
 

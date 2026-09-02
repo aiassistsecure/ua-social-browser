@@ -188,6 +188,9 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      nedb-engine:
+        specifier: ^2.8.2
+        version: 2.8.2
       pino:
         specifier: ^9.14.0
         version: 9.14.0
@@ -2445,6 +2448,11 @@ packages:
   nanoid@3.3.16:
     resolution: {integrity: sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
+    hasBin: true
+
+  nedb-engine@2.8.2:
+    resolution: {integrity: sha512-hMsfWoXCFoOJ/bNg+7anUiJ56/tH1+6CVIT1gtLgFAzeKMIuEe8/xWyVRR99MWr/6qiMhDiG4vMQuqbodlWN/Q==}
+    engines: {node: '>= 16'}
     hasBin: true
 
   negotiator@1.0.0:
@@ -4931,6 +4939,8 @@ snapshots:
   ms@2.1.3: {}
 
   nanoid@3.3.16: {}
+
+  nedb-engine@2.8.2: {}
 
   negotiator@1.0.0: {}
 

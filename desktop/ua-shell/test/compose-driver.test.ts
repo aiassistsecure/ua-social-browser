@@ -32,6 +32,8 @@ function assertUnconfirmed(outcome: PublishOutcome) {
 type Script = {
   probe?: ProbeState[];
   enterText?: { ok: boolean; detail?: string };
+  attachMedia?: { ok: boolean; detail?: string };
+  mediaReady?: boolean[];
   clickSubmit?: boolean[];
   confirm?: ConfirmState[];
 };
@@ -62,6 +64,14 @@ function fakePage(script: Script) {
       calls.push(`enterText:${text}`);
       return script.enterText ?? { ok: true };
     },
+    async attachMedia(paths: string[]) {
+      calls.push(`attachMedia:${paths.join(",")}`);
+      return script.attachMedia ?? { ok: true };
+    },
+    async mediaReady() {
+      calls.push("mediaReady");
+      return next(script.mediaReady, true);
+    },
     async clickSubmit() {
       calls.push("clickSubmit");
       return next(script.clickSubmit, false);
@@ -90,12 +100,24 @@ function clock(budgetMs: number) {
   };
 }
 
-function run(script: Script, over: Partial<{ allowHotkey: boolean; hasOpener: boolean }> = {}) {
+function run(
+  script: Script,
+  over: Partial<{
+    allowHotkey: boolean;
+    hasOpener: boolean;
+    media: string[];
+    canAttach: boolean;
+    reportsMediaReady: boolean;
+  }> = {},
+) {
   const { page, calls } = fakePage(script);
   const time = clock(5_000);
   return runComposeFlow(page, {
     label: "TestNet",
     body: "the approved words",
+    media: over.media ?? [],
+    canAttach: over.canAttach ?? true,
+    reportsMediaReady: over.reportsMediaReady ?? true,
     deadline: time.deadline,
     allowHotkey: over.allowHotkey ?? false,
     hasOpener: over.hasOpener ?? false,
@@ -210,5 +232,93 @@ describe("the shared composer flow", () => {
 
     assertUnconfirmed(outcome);
     assert.match(String(outcome.detail), /unknown/);
+  });
+
+  test("an attachment goes on before the post is submitted, never after", async () => {
+    const { outcome, calls } = await run(
+      { probe: ["composer"], clickSubmit: [true], confirm: [{ state: "sent" }] },
+      { media: ["/data/media/abc/photo.jpg"] },
+    );
+
+    assert.equal(outcome.kind, "published");
+    const attached = calls.indexOf("attachMedia:/data/media/abc/photo.jpg");
+    const submitted = calls.indexOf("clickSubmit");
+    assert.ok(attached >= 0, "the file must actually be attached");
+    assert.ok(
+      attached < submitted,
+      "submitting before the file is attached posts the words without the picture",
+    );
+  });
+
+  test("a post waits for the network to finish taking the file", async () => {
+    const { outcome, calls } = await run(
+      {
+        probe: ["composer"],
+        mediaReady: [false, false, true],
+        clickSubmit: [true],
+        confirm: [{ state: "sent" }],
+      },
+      { media: ["/data/media/abc/photo.jpg"] },
+    );
+
+    assert.equal(outcome.kind, "published");
+    const lastReady = calls.lastIndexOf("mediaReady");
+    assert.ok(
+      lastReady < calls.indexOf("clickSubmit"),
+      "an upload still in flight must not be submitted",
+    );
+  });
+
+  test("an upload that never lands is a refusal, not a text-only post", async () => {
+    const { outcome, calls } = await run(
+      { probe: ["composer"], mediaReady: [false] },
+      { media: ["/data/media/abc/photo.jpg"] },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.ok(
+      !calls.includes("clickSubmit"),
+      "nothing may be submitted once the attachment is known to be missing",
+    );
+  });
+
+  test("a file that could not be attached stops the post", async () => {
+    const { outcome, calls } = await run(
+      {
+        probe: ["composer"],
+        attachMedia: { ok: false, detail: "No file input matched." },
+        clickSubmit: [true],
+        confirm: [{ state: "sent" }],
+      },
+      { media: ["/data/media/abc/photo.jpg"] },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.match(outcome.detail, /No file input matched/);
+    assert.ok(!calls.includes("clickSubmit"), "a failed attachment must not post the text alone");
+  });
+
+  test("a network with no upload control refuses a post that carries one", async () => {
+    const { outcome, calls } = await run(
+      { probe: ["composer"], clickSubmit: [true], confirm: [{ state: "sent" }] },
+      { media: ["/data/media/abc/photo.jpg"], canAttach: false },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.ok(!calls.includes("clickSubmit"), "the text alone is not the approved post");
+  });
+
+  test("a text-only post never touches the upload path", async () => {
+    const { outcome, calls } = await run({
+      probe: ["composer"],
+      clickSubmit: [true],
+      confirm: [{ state: "sent" }],
+    });
+
+    assert.equal(outcome.kind, "published");
+    assert.ok(
+      !calls.some((call) => call.startsWith("attachMedia") || call === "mediaReady"),
+      "adding attachments must not change how a plain post behaves",
+    );
   });
 });

@@ -6,5 +6,6 @@
 - [Blank tabs in the shell](blank-tab.md) — a view with no renderer can deadlock its own first load, and a black tab is the only symptom.
 - [The API server child](api-server-child.md) — it locks the data directory, so quit must wait for it and a reclaim must prove the pid is still ours.
 - [Scheduled dispatch](scheduled-dispatch.md) — sending on a clock: one writer for the state document, one attempt per instruction, intent on disk before the network call.
+- [Attachments](attachments.md) — uploads are content-addressed on disk, never in the state document; the shell re-hashes every file before it goes to a network, and an approval covers the pictures too.
 - [No seed data](no-seed-data.md) — fictional boot state produced a real post signed by a person who does not exist; a fresh install is empty and approval requires a real approver name.
 - [First verified post](first-verified-post.md) — X has been watched landing a real post (2026-09-02, macOS); the six shared-composer adapters have not. What that proves and what it doesn't.

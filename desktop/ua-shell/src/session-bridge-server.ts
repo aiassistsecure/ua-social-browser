@@ -45,11 +45,21 @@ export type SessionSnapshot = {
   detail: string;
 };
 
+export type PublishMediaInput = {
+  /** Absolute path inside the shared data directory. Verified before upload. */
+  path: string;
+  sha256: string;
+  filename: string;
+  mimeType: string;
+  altText?: string;
+};
+
 export type PublishRequestInput = {
   workspaceId: string;
   draftId: string;
   platform: string;
   body: string;
+  media: PublishMediaInput[];
   idempotencyKey: string;
 };
 
@@ -167,13 +177,46 @@ function parsePublishInput(raw: unknown): PublishRequestInput | null {
     }
   }
 
+  // A malformed attachment is a refused request, not a dropped attachment.
+  // Posting the text without the picture would be publishing something nobody
+  // approved, and doing it quietly is worse than doing it loudly.
+  const media = parsePublishMedia(value.media);
+  if (media === null) return null;
+
   return {
     workspaceId: value.workspaceId as string,
     draftId: value.draftId as string,
     platform: value.platform as string,
     body: value.body as string,
+    media,
     idempotencyKey: value.idempotencyKey as string,
   };
+}
+
+/** `null` means the field was present but unusable; `[]` means none were sent. */
+function parsePublishMedia(raw: unknown): PublishMediaInput[] | null {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return null;
+
+  const media: PublishMediaInput[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const item = entry as Record<string, unknown>;
+    const required = ["path", "sha256", "filename", "mimeType"] as const;
+    for (const field of required) {
+      if (typeof item[field] !== "string" || (item[field] as string).trim() === "") {
+        return null;
+      }
+    }
+    media.push({
+      path: item.path as string,
+      sha256: item.sha256 as string,
+      filename: item.filename as string,
+      mimeType: item.mimeType as string,
+      ...(typeof item.altText === "string" ? { altText: item.altText } : {}),
+    });
+  }
+  return media;
 }
 
 /** Maps a publish outcome onto the HTTP shape the API server expects. */

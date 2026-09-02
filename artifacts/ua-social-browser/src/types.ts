@@ -75,11 +75,31 @@ export type DraftStatus =
   | 'published'
   | 'failed';
 
+/**
+ * An attachment, as the draft carries it.
+ *
+ * A reference, never the bytes. The whole browser state document is written on
+ * every edit, so an image inside it would be rewritten on every keystroke and
+ * kept forever by the append-only ledger. The file itself lives under the data
+ * directory, addressed by the hash of its contents, and that hash is what lets
+ * the shell prove the file it uploads is the file that was approved.
+ */
+export interface DraftMedia {
+  /** `<sha256>/<filename>`; also the path segment for `/api/media/`. */
+  id: string;
+  sha256: string;
+  filename: string;
+  mimeType: string;
+  bytes: number;
+  altText?: string;
+}
+
 export interface Draft {
   id: string;
   workspaceId: string;
   platform: Platform;
   body: string;
+  media: DraftMedia[];
   status: DraftStatus;
   scheduledFor: string | null;
   approvedBy: string | null;

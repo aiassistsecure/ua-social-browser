@@ -30,7 +30,8 @@ import type {
   SessionStatus,
   SignInInvitation,
   SignInRequest,
-  TenantInfo
+  TenantInfo,
+  UploadedMedia
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -364,6 +365,155 @@ export const usePublishPost = <TError = ErrorType<void>,
       > => {
       return useMutation(getPublishPostMutationOptions(options));
     }
+
+export const getUploadMediaUrl = () => {
+
+
+
+
+  return `/api/media`
+}
+
+/**
+ * Accepts raw bytes and stores them content-addressed under the data directory, returning a reference. The bytes stay on disk: a draft, and later a publish request, carry only the reference, because the browser state document is rewritten whole on every edit and must not grow by the size of an image.
+ * @summary Store an image or video for attachment to a draft
+ */
+export const uploadMedia = async (uploadMediaBody: Blob, options?: Parameters<typeof customFetch>[1]): Promise<UploadedMedia> => {
+
+  return customFetch<UploadedMedia>(getUploadMediaUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', ...options?.headers },
+    body: uploadMediaBody
+  }
+);}
+
+
+
+
+
+export const getUploadMediaMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadMedia>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof uploadMedia>>, TError,{data: BodyType<Blob>}, TContext> => {
+
+const mutationKey = ['uploadMedia'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof uploadMedia>>, {data: BodyType<Blob>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  uploadMedia(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UploadMediaMutationResult = NonNullable<Awaited<ReturnType<typeof uploadMedia>>>
+    export type UploadMediaMutationBody = BodyType<Blob>
+    export type UploadMediaMutationError = ErrorType<void>
+
+    /**
+ * @summary Store an image or video for attachment to a draft
+ */
+export const useUploadMedia = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadMedia>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof uploadMedia>>,
+        TError,
+        {data: BodyType<Blob>},
+        TContext
+      > => {
+      return useMutation(getUploadMediaMutationOptions(options));
+    }
+
+export const getGetMediaUrl = (id: string,) => {
+
+
+
+
+  return `/api/media/${id}`
+}
+
+/**
+ * @summary Read stored bytes back, for preview
+ */
+export const getMedia = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
+
+  return customFetch<Blob>(getGetMediaUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMediaQueryKey = (id: string,) => {
+    return [
+    `/api/media/${id}`
+    ] as const;
+    }
+
+
+export const getGetMediaQueryOptions = <TData = Awaited<ReturnType<typeof getMedia>>, TError = ErrorType<void>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMedia>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMediaQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMedia>>> = ({ signal }) => getMedia(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMedia>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMediaQueryResult = NonNullable<Awaited<ReturnType<typeof getMedia>>>
+export type GetMediaQueryError = ErrorType<void>
+
+
+/**
+ * @summary Read stored bytes back, for preview
+ */
+
+export function useGetMedia<TData = Awaited<ReturnType<typeof getMedia>>, TError = ErrorType<void>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMedia>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMediaQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
 export const getHealthCheckUrl = () => {
 

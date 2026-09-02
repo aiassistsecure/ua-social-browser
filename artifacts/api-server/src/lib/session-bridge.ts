@@ -29,6 +29,20 @@ export type BridgePublishInput = {
   draftId: string;
   platform: string;
   body: string;
+  /**
+   * References, not bytes. The shell resolves each one against the same data
+   * directory this process writes to — the shell set `NEDB_DATA_DIR` and
+   * spawned this server, so both see one filesystem — and re-hashes the file
+   * before uploading it.
+   */
+  media?: Array<{
+    /** Absolute path in the shared data directory; the shell re-hashes it. */
+    path: string;
+    sha256: string;
+    filename: string;
+    mimeType: string;
+    altText?: string;
+  }>;
   idempotencyKey: string;
 };
 

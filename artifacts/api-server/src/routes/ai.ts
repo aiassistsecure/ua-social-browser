@@ -16,12 +16,31 @@ type ChatCompletionResponse = {
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 };
 
+/**
+ * The credential is `AIASSIST_API_KEY`. `AIAssIST_API_KEY` was the original,
+ * awkwardly-cased spelling and is still accepted so an existing install keeps
+ * working, but it warns once: two names for one credential is exactly how an
+ * environment ends up with a stale copy that nobody notices is unused.
+ */
+const LEGACY_API_KEY_VAR = "AIAssIST_API_KEY";
+let warnedAboutLegacyKeyVar = false;
+
 function getApiKey() {
-  const key = process.env.AIASSIST_API_KEY;
-  if (!key) {
-    throw new Error("AIASSIST_API_KEY is not configured");
+  const key = process.env.AIASSIST_API_KEY?.trim();
+  if (key) return key;
+
+  const legacy = process.env[LEGACY_API_KEY_VAR]?.trim();
+  if (legacy) {
+    if (!warnedAboutLegacyKeyVar) {
+      warnedAboutLegacyKeyVar = true;
+      console.warn(
+        `[ai] Using ${LEGACY_API_KEY_VAR}, which is deprecated. Save the same value as AIASSIST_API_KEY and delete the old one.`,
+      );
+    }
+    return legacy;
   }
-  return key;
+
+  throw new Error("AIASSIST_API_KEY is not configured");
 }
 
 function parseJsonContent(content: string) {

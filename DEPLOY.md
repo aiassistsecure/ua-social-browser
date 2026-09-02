@@ -47,7 +47,7 @@ container. Set `AIASSIST_API_KEY` before you expect any AI feature to answer.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `AIASSIST_API_KEY` | yes | — | Credential for `api.AiAssist.net`. Server-side only. |
+| `AIASSIST_API_KEY` | yes | — | Credential for `api.AiAssist.net`. Server-side only. The former spelling `AIAssIST_API_KEY` is still read as a fallback and logs a deprecation warning on first use; migrate and delete it, because two names for one credential is how an environment ends up with a stale copy nobody notices. |
 | `PORT` | injected | `8080` | Assigned per artifact by Replit. Never hard-code it. |
 | `NEDB_DATA_DIR` | no | `<cwd>/.data/ua-social-browser` | Append-only ledger location. Point it at a persistent volume in the desktop build. |
 | `UA_SESSION_BRIDGE_URL` | no | unset | Loopback address of the native shell's publisher IPC endpoint. **Unset means publishing is disabled.** |

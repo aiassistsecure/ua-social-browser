@@ -338,6 +338,12 @@ multi-tenant auth layer.
   guard. Leave it on; use the exclude list if something is genuinely urgent.
 - **`nedb-engine` stays external** in the api-server esbuild bundle — bundling
   it breaks startup on a native binding.
+- **The API server child outlives a badly-killed shell.** It holds an exclusive
+  lock on the data directory, so the *next* launch dies with "locked by another
+  process (pid N)" — an error about a pid the operator cannot connect to this
+  app. Quit now waits for the child, the shell records its pid, and the next
+  start reclaims it (only when the pid's command line still matches what was
+  recorded — pids get reused). Do not "simplify" that check away.
 - **Nothing that needs a renderer may block a first load.** A fresh
   `WebContentsView` has no renderer until something loads, so CDP
   `Emulation.*` commands sent to it can sit unanswered. Awaiting them before

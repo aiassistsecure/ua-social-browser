@@ -18,7 +18,7 @@ import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { IdempotencyLedger } from "../src/idempotency";
-import { waitForHttpOk } from "../src/net";
+import { freeLoopbackPort, waitForHttpOk } from "../src/net";
 import {
   startSessionBridge,
   type PublishOutcome,
@@ -79,7 +79,10 @@ describe(
 
       bridge = await startSessionBridge({ publisher, token: BRIDGE_TOKEN });
 
-      const port = 8200 + Math.floor(Math.random() * 300);
+      // Asking the OS beats guessing: a random port in a fixed range collides
+      // with whatever else the machine is running, and the failure reads as a
+      // broken API server rather than an occupied port.
+      const port = await freeLoopbackPort();
       apiBase = `http://127.0.0.1:${port}`;
       api = spawn(process.execPath, [apiEntry], {
         env: {

@@ -22,7 +22,11 @@ import { createLogger, errorFields } from "./logger";
 import { freeLoopbackPort } from "./net";
 import { startSessionBridge, type SessionBridgeHandle } from "./session-bridge-server";
 import { startWorkspaceUiServer, SHELL_COOKIE_NAME, type UiServerHandle } from "./ui-server";
-import { startApiServer, type ApiServerHandle } from "./api-process";
+import {
+  reclaimOrphanedApiServer,
+  startApiServer,
+  type ApiServerHandle,
+} from "./api-process";
 import { IdempotencyLedger } from "./idempotency";
 import { WorkspaceDirectory } from "./workspace-directory";
 import { createPublisher } from "./publisher";
@@ -61,8 +65,16 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(bootstrap).catch(fatal);
 
   app.on("window-all-closed", () => app.quit());
-  app.on("before-quit", () => {
-    void shutdown();
+
+  // Quitting has to wait for the API server child: it holds an exclusive lock
+  // on the data directory, and a shell that exits while it is still alive
+  // leaves the next launch unable to open its own files.
+  let quitting = false;
+  app.on("before-quit", (event) => {
+    if (quitting) return;
+    quitting = true;
+    event.preventDefault();
+    void shutdown().finally(() => app.exit(0));
   });
 }
 
@@ -129,6 +141,11 @@ async function bootstrap(): Promise<void> {
   // 2. The API server, wired to it.
   let api: ApiServerHandle | null = null;
   if (config.apiServer.kind === "spawn") {
+    // A shell that died badly can leave its API server running, and that child
+    // holds the data directory open against everything that follows.
+    const pidFile = path.join(config.userDataDir, "api-server.pid");
+    await reclaimOrphanedApiServer(pidFile);
+
     const port = await freeLoopbackPort();
     api = await startApiServer({
       entry: config.apiServer.entry,
@@ -137,6 +154,7 @@ async function bootstrap(): Promise<void> {
       bridgeToken,
       accessToken: apiAccessToken,
       dataDir: config.dataDir,
+      pidFile,
     });
     apiBaseUrl = api.baseUrl;
   } else {

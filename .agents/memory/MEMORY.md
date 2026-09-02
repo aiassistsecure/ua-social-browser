@@ -1,0 +1,2 @@
+- [nedb-engine native binding](nedb-engine-native-binding.md) — must stay external in esbuild bundles or startup dies looking for a package that was never published.
+- [Publishing boundary](publishing-boundary.md) — posts only leave through the user's own session via the native shell; the web surface must fail loudly, never fake success.

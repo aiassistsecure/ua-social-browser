@@ -6,10 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type AiSuggestionInputPlatform = typeof AiSuggestionInputPlatform[keyof typeof AiSuggestionInputPlatform];
+export type PublishRequestPlatform = typeof PublishRequestPlatform[keyof typeof PublishRequestPlatform];
 
 
-export const AiSuggestionInputPlatform = {
+export const PublishRequestPlatform = {
   x: 'x',
   instagram: 'instagram',
   facebook: 'facebook',

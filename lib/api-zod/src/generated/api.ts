@@ -9,6 +9,65 @@ import * as zod from 'zod';
 
 
 /**
+ * @summary Resolve the tenant that owns the current request
+ */
+export const GetTenantResponse = zod.object({
+  "id": zod.string().describe('Scope key every stored document is written under'),
+  "mode": zod.enum(['single', 'multi']),
+  "label": zod.string()
+})
+
+
+/**
+ * @summary Report whether a workspace session can post right now
+ */
+export const GetSessionStatusQueryParams = zod.object({
+  "workspaceId": zod.coerce.string()
+})
+
+export const GetSessionStatusResponse = zod.object({
+  "workspaceId": zod.string(),
+  "bridgeAvailable": zod.boolean().describe('True when the native browser session bridge is reachable'),
+  "authenticated": zod.boolean().describe('True when the workspace session is signed in to the platform'),
+  "accountHandle": zod.string().optional(),
+  "detail": zod.string()
+})
+
+
+/**
+ * Submits an already human-approved post through the browser session that belongs to the workspace. The request is rejected unless an explicit human approval is attached. Requires the native session bridge; there is no server-side fallback that posts on the user's behalf.
+ * @summary Post approved content through the workspace's authenticated session
+ */
+export const publishPostBodyBodyMax = 12000;
+
+export const publishPostBodyApprovalApprovedByMax = 120;
+
+
+
+export const PublishPostBody = zod.object({
+  "workspaceId": zod.string(),
+  "draftId": zod.string(),
+  "platform": zod.enum(['x', 'instagram', 'facebook', 'threads', 'linkedin', 'bluesky', 'mastodon', 'reddit', 'tiktok', 'youtube', 'pinterest', 'tumblr']),
+  "body": zod.string().min(1).max(publishPostBodyBodyMax),
+  "approval": zod.object({
+  "approvedBy": zod.string().min(1).max(publishPostBodyApprovalApprovedByMax),
+  "approvedAt": zod.string()
+}).describe('Human sign-off captured in the UI before anything is posted'),
+  "idempotencyKey": zod.string().optional()
+})
+
+export const PublishPostResponse = zod.object({
+  "draftId": zod.string(),
+  "status": zod.enum(['published', 'failed']),
+  "platform": zod.string(),
+  "attemptedAt": zod.string(),
+  "postUrl": zod.string().optional(),
+  "postId": zod.string().optional(),
+  "message": zod.string().optional()
+})
+
+
+/**
  * Returns server health status
  * @summary Health check
  */
@@ -48,7 +107,7 @@ export const createAiSuggestionBodyMaxCharactersMax = 5000;
 export const createAiSuggestionBodyIncludeHashtagsDefault = true;
 
 export const CreateAiSuggestionBody = zod.object({
-  "platform": zod.enum(['linkedin', 'x', 'instagram', 'facebook', 'threads']),
+  "platform": zod.enum(['x', 'instagram', 'facebook', 'threads', 'linkedin', 'bluesky', 'mastodon', 'reddit', 'tiktok', 'youtube', 'pinterest', 'tumblr']),
   "task": zod.enum(['suggest', 'rewrite', 'shorten', 'expand', 'variants', 'hashtags']),
   "tone": zod.string().min(1).max(createAiSuggestionBodyToneMax),
   "audience": zod.string().min(1).max(createAiSuggestionBodyAudienceMax),

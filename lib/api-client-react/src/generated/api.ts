@@ -23,7 +23,12 @@ import type {
   AiModelList,
   AiSuggestionInput,
   AiSuggestionResult,
-  HealthStatus
+  GetSessionStatusParams,
+  HealthStatus,
+  PublishRequest,
+  PublishResult,
+  SessionStatus,
+  TenantInfo
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -52,6 +57,239 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
   }
   return result;
 };
+
+export const getGetTenantUrl = () => {
+
+
+
+
+  return `/api/tenant`
+}
+
+/**
+ * @summary Resolve the tenant that owns the current request
+ */
+export const getTenant = async ( options?: Parameters<typeof customFetch>[1]): Promise<TenantInfo> => {
+
+  return customFetch<TenantInfo>(getGetTenantUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetTenantQueryKey = () => {
+    return [
+    `/api/tenant`
+    ] as const;
+    }
+
+
+export const getGetTenantQueryOptions = <TData = Awaited<ReturnType<typeof getTenant>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTenant>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTenantQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTenant>>> = ({ signal }) => getTenant({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTenant>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetTenantQueryResult = NonNullable<Awaited<ReturnType<typeof getTenant>>>
+export type GetTenantQueryError = ErrorType<void>
+
+
+/**
+ * @summary Resolve the tenant that owns the current request
+ */
+
+export function useGetTenant<TData = Awaited<ReturnType<typeof getTenant>>, TError = ErrorType<void>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTenant>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetTenantQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetSessionStatusUrl = (params: GetSessionStatusParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/session/status?${stringifiedParams}` : `/api/session/status`
+}
+
+/**
+ * @summary Report whether a workspace session can post right now
+ */
+export const getSessionStatus = async (params: GetSessionStatusParams, options?: Parameters<typeof customFetch>[1]): Promise<SessionStatus> => {
+
+  return customFetch<SessionStatus>(getGetSessionStatusUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetSessionStatusQueryKey = (params?: GetSessionStatusParams,) => {
+    return [
+    `/api/session/status`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetSessionStatusQueryOptions = <TData = Awaited<ReturnType<typeof getSessionStatus>>, TError = ErrorType<unknown>>(params: GetSessionStatusParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSessionStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSessionStatusQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSessionStatus>>> = ({ signal }) => getSessionStatus(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSessionStatus>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSessionStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getSessionStatus>>>
+export type GetSessionStatusQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Report whether a workspace session can post right now
+ */
+
+export function useGetSessionStatus<TData = Awaited<ReturnType<typeof getSessionStatus>>, TError = ErrorType<unknown>>(
+ params: GetSessionStatusParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSessionStatus>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSessionStatusQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getPublishPostUrl = () => {
+
+
+
+
+  return `/api/publish`
+}
+
+/**
+ * Submits an already human-approved post through the browser session that belongs to the workspace. The request is rejected unless an explicit human approval is attached. Requires the native session bridge; there is no server-side fallback that posts on the user's behalf.
+ * @summary Post approved content through the workspace's authenticated session
+ */
+export const publishPost = async (publishRequest: PublishRequest, options?: Parameters<typeof customFetch>[1]): Promise<PublishResult> => {
+
+  return customFetch<PublishResult>(getPublishPostUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(publishRequest)
+  }
+);}
+
+
+
+
+
+export const getPublishPostMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof publishPost>>, TError,{data: BodyType<PublishRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof publishPost>>, TError,{data: BodyType<PublishRequest>}, TContext> => {
+
+const mutationKey = ['publishPost'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof publishPost>>, {data: BodyType<PublishRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  publishPost(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PublishPostMutationResult = NonNullable<Awaited<ReturnType<typeof publishPost>>>
+    export type PublishPostMutationBody = BodyType<PublishRequest>
+    export type PublishPostMutationError = ErrorType<void>
+
+    /**
+ * @summary Post approved content through the workspace's authenticated session
+ */
+export const usePublishPost = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof publishPost>>, TError,{data: BodyType<PublishRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof publishPost>>,
+        TError,
+        {data: BodyType<PublishRequest>},
+        TContext
+      > => {
+      return useMutation(getPublishPostMutationOptions(options));
+    }
 
 export const getHealthCheckUrl = () => {
 

@@ -29,6 +29,9 @@ async function buildAll() {
     // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
+      // Loads its prebuilt .node binding relative to its own __dirname, so it
+      // must stay outside the bundle.
+      "nedb-engine",
       "sharp",
       "better-sqlite3",
       "sqlite3",

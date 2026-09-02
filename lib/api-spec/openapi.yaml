@@ -12,7 +12,74 @@ tags:
     description: Health operations
   - name: ai
     description: AI-assisted social content operations
+  - name: publish
+    description: Human-approved publishing through an authenticated workspace session
+  - name: tenancy
+    description: Tenant resolution for the current request
 paths:
+  /tenant:
+    get:
+      operationId: getTenant
+      tags: [tenancy]
+      summary: Resolve the tenant that owns the current request
+      responses:
+        "200":
+          description: Tenant context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantInfo"
+        "401":
+          description: Multi-tenant mode is enabled but the request is unauthenticated
+  /session/status:
+    get:
+      operationId: getSessionStatus
+      tags: [publish]
+      summary: Report whether a workspace session can post right now
+      parameters:
+        - name: workspaceId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStatus"
+  /publish:
+    post:
+      operationId: publishPost
+      tags: [publish]
+      summary: Post approved content through the workspace's authenticated session
+      description: >-
+        Submits an already human-approved post through the browser session that
+        belongs to the workspace. The request is rejected unless an explicit
+        human approval is attached. Requires the native session bridge; there is
+        no server-side fallback that posts on the user's behalf.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishRequest"
+      responses:
+        "200":
+          description: Post accepted by the platform
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishResult"
+        "400":
+          description: Invalid request
+        "409":
+          description: Approval missing or the workspace session is not signed in
+        "502":
+          description: The platform rejected the post
+        "503":
+          description: The session bridge is not available in this runtime
   /healthz:
     get:
       operationId: healthCheck
@@ -91,7 +158,7 @@ components:
       properties:
         platform:
           type: string
-          enum: [linkedin, x, instagram, facebook, threads]
+          enum: [x, instagram, facebook, threads, linkedin, bluesky, mastodon, reddit, tiktok, youtube, pinterest, tumblr]
         task:
           type: string
           enum: [suggest, rewrite, shorten, expand, variants, hashtags]
@@ -155,4 +222,81 @@ components:
           enum: [pin]
         usage:
           $ref: "#/components/schemas/AiUsage"
+    TenantInfo:
+      type: object
+      required: [id, mode, label]
+      properties:
+        id:
+          type: string
+          description: Scope key every stored document is written under
+        mode:
+          type: string
+          enum: [single, multi]
+        label:
+          type: string
+    SessionStatus:
+      type: object
+      required: [workspaceId, bridgeAvailable, authenticated, detail]
+      properties:
+        workspaceId:
+          type: string
+        bridgeAvailable:
+          type: boolean
+          description: True when the native browser session bridge is reachable
+        authenticated:
+          type: boolean
+          description: True when the workspace session is signed in to the platform
+        accountHandle:
+          type: string
+        detail:
+          type: string
+    Approval:
+      type: object
+      required: [approvedBy, approvedAt]
+      description: Human sign-off captured in the UI before anything is posted
+      properties:
+        approvedBy:
+          type: string
+          minLength: 1
+          maxLength: 120
+        approvedAt:
+          type: string
+    PublishRequest:
+      type: object
+      required: [workspaceId, draftId, platform, body, approval]
+      properties:
+        workspaceId:
+          type: string
+        draftId:
+          type: string
+        platform:
+          type: string
+          enum: [x, instagram, facebook, threads, linkedin, bluesky, mastodon, reddit, tiktok, youtube, pinterest, tumblr]
+        body:
+          type: string
+          minLength: 1
+          maxLength: 12000
+        approval:
+          $ref: "#/components/schemas/Approval"
+        idempotencyKey:
+          type: string
+    PublishResult:
+      type: object
+      required: [draftId, status, platform, attemptedAt]
+      properties:
+        draftId:
+          type: string
+        status:
+          type: string
+          enum: [published, failed]
+        platform:
+          type: string
+        attemptedAt:
+          type: string
+        postUrl:
+          type: string
+        postId:
+          type: string
+        message:
+          type: string
 

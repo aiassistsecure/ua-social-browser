@@ -22,11 +22,18 @@ export type AiSuggestionInputPlatform = typeof AiSuggestionInputPlatform[keyof t
 
 
 export const AiSuggestionInputPlatform = {
-  linkedin: 'linkedin',
   x: 'x',
   instagram: 'instagram',
   facebook: 'facebook',
   threads: 'threads',
+  linkedin: 'linkedin',
+  bluesky: 'bluesky',
+  mastodon: 'mastodon',
+  reddit: 'reddit',
+  tiktok: 'tiktok',
+  youtube: 'youtube',
+  pinterest: 'pinterest',
+  tumblr: 'tumblr',
 } as const;
 
 export type AiSuggestionInputTask = typeof AiSuggestionInputTask[keyof typeof AiSuggestionInputTask];
@@ -97,4 +104,94 @@ export interface AiSuggestionResult {
   provider: AiSuggestionResultProvider;
   usage: AiUsage;
 }
+
+export type TenantInfoMode = typeof TenantInfoMode[keyof typeof TenantInfoMode];
+
+
+export const TenantInfoMode = {
+  single: 'single',
+  multi: 'multi',
+} as const;
+
+export interface TenantInfo {
+  /** Scope key every stored document is written under */
+  id: string;
+  mode: TenantInfoMode;
+  label: string;
+}
+
+export interface SessionStatus {
+  workspaceId: string;
+  /** True when the native browser session bridge is reachable */
+  bridgeAvailable: boolean;
+  /** True when the workspace session is signed in to the platform */
+  authenticated: boolean;
+  accountHandle?: string;
+  detail: string;
+}
+
+/**
+ * Human sign-off captured in the UI before anything is posted
+ */
+export interface Approval {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  approvedBy: string;
+  approvedAt: string;
+}
+
+export type PublishRequestPlatform = typeof PublishRequestPlatform[keyof typeof PublishRequestPlatform];
+
+
+export const PublishRequestPlatform = {
+  x: 'x',
+  instagram: 'instagram',
+  facebook: 'facebook',
+  threads: 'threads',
+  linkedin: 'linkedin',
+  bluesky: 'bluesky',
+  mastodon: 'mastodon',
+  reddit: 'reddit',
+  tiktok: 'tiktok',
+  youtube: 'youtube',
+  pinterest: 'pinterest',
+  tumblr: 'tumblr',
+} as const;
+
+export interface PublishRequest {
+  workspaceId: string;
+  draftId: string;
+  platform: PublishRequestPlatform;
+  /**
+     * @minLength 1
+     * @maxLength 12000
+     */
+  body: string;
+  approval: Approval;
+  idempotencyKey?: string;
+}
+
+export type PublishResultStatus = typeof PublishResultStatus[keyof typeof PublishResultStatus];
+
+
+export const PublishResultStatus = {
+  published: 'published',
+  failed: 'failed',
+} as const;
+
+export interface PublishResult {
+  draftId: string;
+  status: PublishResultStatus;
+  platform: string;
+  attemptedAt: string;
+  postUrl?: string;
+  postId?: string;
+  message?: string;
+}
+
+export type GetSessionStatusParams = {
+workspaceId: string;
+};
 

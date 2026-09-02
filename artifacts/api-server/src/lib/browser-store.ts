@@ -10,7 +10,15 @@ mkdirSync(dataDirectory, { recursive: true });
 
 const db = NedbCore.open(dataDirectory);
 const COLLECTION = "browser_state";
-const DOCUMENT_ID = "primary";
+
+/**
+ * Documents are keyed by tenant scope even though the product ships
+ * single-tenant. Flipping UA_TENANCY_MODE to "multi" then partitions state
+ * without a migration.
+ */
+function documentId(tenantId: string): string {
+  return `state:${tenantId}`;
+}
 
 export type BrowserStateDocument = {
   version: number;
@@ -25,16 +33,21 @@ export type BrowserStateDocument = {
   updatedAt: string;
 };
 
-export function readBrowserState(): BrowserStateDocument | null {
-  const document = db.get(COLLECTION, DOCUMENT_ID);
+export function readBrowserState(
+  tenantId: string,
+): BrowserStateDocument | null {
+  const document = db.get(COLLECTION, documentId(tenantId));
   return document ? (JSON.parse(document) as BrowserStateDocument) : null;
 }
 
-export function writeBrowserState(state: BrowserStateDocument) {
+export function writeBrowserState(
+  tenantId: string,
+  state: BrowserStateDocument,
+): BrowserStateDocument {
   const stored = JSON.parse(
     db.put(
       COLLECTION,
-      DOCUMENT_ID,
+      documentId(tenantId),
       JSON.stringify({ ...state, updatedAt: new Date().toISOString() }),
     ),
   ) as BrowserStateDocument;
@@ -51,10 +64,11 @@ export function getStoreHealth() {
   };
 }
 
-export function exportStoreHistory() {
+export function exportStoreHistory(tenantId: string) {
   const tip = db.tipCollection(COLLECTION);
   return {
-    state: readBrowserState(),
+    tenantId,
+    state: readBrowserState(tenantId),
     integrity: getStoreHealth(),
     tip: tip ? JSON.parse(tip) : null,
   };

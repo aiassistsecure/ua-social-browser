@@ -131,4 +131,9 @@ Not there yet: signed installers for each OS, and per-tab UA switching (it is pe
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+GNU General Public License v3.0 or later — see [LICENSE](./LICENSE).
+
+If you distribute a modified version of this browser, your changes have to stay
+free software too. That is deliberate: a tool whose whole premise is that a
+person stays in control of what gets posted should not be quietly forked into
+an autopilot behind a closed door.

@@ -96,8 +96,16 @@ async function callBridge(
   }
 }
 
+/**
+ * Reads one network's session inside a workspace.
+ *
+ * `platform` is optional because a workspace has a primary network, but the
+ * operator may hold accounts on several inside the same identity. Each is its
+ * own session, so a badge for one account may never be drawn from another's.
+ */
 export async function readSessionStatus(
   workspaceId: string,
+  platform?: string,
 ): Promise<BridgeStatus> {
   if (!isBridgeConfigured()) {
     return {
@@ -112,8 +120,9 @@ export async function readSessionStatus(
   }
 
   try {
+    const query = platform ? `?platform=${encodeURIComponent(platform)}` : "";
     const { ok, payload } = await callBridge(
-      `/session/${encodeURIComponent(workspaceId)}`,
+      `/session/${encodeURIComponent(workspaceId)}${query}`,
       { method: "GET" },
     );
 
@@ -171,7 +180,10 @@ export type BridgeSignIn = {
  * usable is a separate question, answered by reading the session back — so
  * `opened: true` must never be rendered as "signed in".
  */
-export async function beginSignIn(workspaceId: string): Promise<BridgeSignIn> {
+export async function beginSignIn(
+  workspaceId: string,
+  platform?: string,
+): Promise<BridgeSignIn> {
   if (!isBridgeConfigured()) {
     return {
       workspaceId,
@@ -188,7 +200,11 @@ export async function beginSignIn(workspaceId: string): Promise<BridgeSignIn> {
   try {
     const { ok, payload } = await callBridge(
       `/signin/${encodeURIComponent(workspaceId)}`,
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ platform }),
+      },
     );
 
     const data = (payload ?? {}) as {

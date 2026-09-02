@@ -75,14 +75,20 @@ export type SignInInvitation = {
 };
 
 export type PublisherPort = {
-  sessionStatus(workspaceId: string): Promise<SessionSnapshot>;
+  /**
+   * `platform` names which network's session to read. It is optional because a
+   * workspace has a primary network; it is *offered* because the same identity
+   * may hold accounts on several, and each of those is a separate session that
+   * must be read on its own rather than inferred from a sibling.
+   */
+  sessionStatus(workspaceId: string, platform?: string): Promise<SessionSnapshot>;
   publish(input: PublishRequestInput): Promise<PublishOutcome>;
   /**
    * Opens the network's own login page inside the workspace's masked session.
    * Returns as soon as the window is up: a human sign-in takes minutes and may
    * involve a second factor, so nothing here waits on it.
    */
-  beginSignIn(workspaceId: string): Promise<SignInInvitation>;
+  beginSignIn(workspaceId: string, platform?: string): Promise<SignInInvitation>;
 };
 
 export type BridgeLogger = {
@@ -239,7 +245,10 @@ export async function startSessionBridge(options: {
     const sessionMatch = /^\/session\/(.+)$/.exec(path);
     if (request.method === "GET" && sessionMatch) {
       const workspaceId = decodeURIComponent(sessionMatch[1] as string);
-      const snapshot = await publisher.sessionStatus(workspaceId);
+      const snapshot = await publisher.sessionStatus(
+        workspaceId,
+        url.searchParams.get("platform") ?? undefined,
+      );
       sendJson(response, 200, {
         authenticated: snapshot.authenticated,
         accountHandle: snapshot.accountHandle,
@@ -251,10 +260,34 @@ export async function startSessionBridge(options: {
     const signInMatch = /^\/signin\/(.+)$/.exec(path);
     if (request.method === "POST" && signInMatch) {
       const workspaceId = decodeURIComponent(signInMatch[1] as string);
-      const invitation = await publisher.beginSignIn(workspaceId);
+
+      // The body is optional — a sign-in with no platform means the
+      // workspace's own network — but an unreadable one is refused rather
+      // than quietly treated as "no platform", which would open the wrong
+      // network's login page and look like the app ignored the request.
+      let platform: string | undefined;
+      try {
+        const text = await readBody(request);
+        if (text.trim() !== "") {
+          const parsed: unknown = JSON.parse(text);
+          const raw = (parsed as { platform?: unknown } | null)?.platform;
+          platform = typeof raw === "string" && raw.trim() !== "" ? raw.trim() : undefined;
+        }
+      } catch (error) {
+        sendJson(response, 400, {
+          detail:
+            error instanceof Error
+              ? `Unreadable sign-in request: ${error.message}`
+              : "Unreadable sign-in request",
+        });
+        return;
+      }
+
+      const invitation = await publisher.beginSignIn(workspaceId, platform);
 
       logger?.info("Live sign-in requested", {
         workspaceId,
+        platform,
         opened: invitation.opened,
         alreadySignedIn: invitation.alreadySignedIn,
       });

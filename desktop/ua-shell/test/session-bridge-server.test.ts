@@ -30,23 +30,26 @@ const calls: Recorded[] = [];
 let nextPublish: PublishOutcome = { kind: "published", postUrl: "https://x.com/a/status/1", postId: "1" };
 let nextSession: SessionSnapshot = { authenticated: true, accountHandle: "@acme", detail: "signed in" };
 
-const signInCalls: string[] = [];
+const signInCalls: { workspaceId: string; platform?: string }[] = [];
 let nextSignIn: SignInInvitation = {
   opened: true,
   alreadySignedIn: false,
   detail: "Sign in to X in this workspace's tab.",
 };
 
+const sessionCalls: { workspaceId: string; platform?: string }[] = [];
+
 const stub: PublisherPort = {
-  async sessionStatus(): Promise<SessionSnapshot> {
+  async sessionStatus(workspaceId, platform): Promise<SessionSnapshot> {
+    sessionCalls.push({ workspaceId, platform });
     return nextSession;
   },
   async publish(input): Promise<PublishOutcome> {
     calls.push(input);
     return nextPublish;
   },
-  async beginSignIn(workspaceId) {
-    signInCalls.push(workspaceId);
+  async beginSignIn(workspaceId, platform) {
+    signInCalls.push({ workspaceId, platform });
     return nextSignIn;
   },
 };
@@ -232,7 +235,45 @@ test("a sign-in request reaches the publisher and reports only what it did", asy
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), nextSignIn);
-  assert.ok(signInCalls.includes("ws-1"));
+  assert.ok(signInCalls.some((call) => call.workspaceId === "ws-1"));
+});
+
+test("a sign-in can name the network, for a workspace holding more than one account", async () => {
+  const response = await fetch(`${bridge.url}/signin/ws-1`, {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: JSON.stringify({ platform: "linkedin" }),
+  });
+
+  assert.equal(response.status, 200);
+  const last = signInCalls.at(-1);
+  assert.equal(last?.workspaceId, "ws-1");
+  assert.equal(last?.platform, "linkedin");
+});
+
+test("an unreadable sign-in body is refused rather than defaulted", async () => {
+  // Falling back to the workspace's own network here would open the wrong
+  // login page and look like the app ignored what was asked for.
+  const before = signInCalls.length;
+
+  const response = await fetch(`${bridge.url}/signin/ws-1`, {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: "{not json",
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(signInCalls.length, before, "the publisher must not be consulted");
+});
+
+test("a session can be read for one network of a workspace", async () => {
+  nextSession = { authenticated: true, accountHandle: "@acme", detail: "signed in" };
+  const response = await fetch(`${bridge.url}/session/ws-1?platform=mastodon`, {
+    headers: auth,
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(sessionCalls.at(-1)?.platform, "mastodon");
 });
 
 test("an already-signed-in workspace is told so rather than handed a tab", async () => {

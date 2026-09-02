@@ -8,4 +8,6 @@
 
 export interface SignInRequest {
   workspaceId: string;
+  /** Which network to sign in to inside this workspace. Defaults to the workspace's own platform. The login page always opens in this workspace's tab, under its isolated session and UA profile. */
+  platform?: string;
 }

@@ -235,6 +235,10 @@ one, update this table, `README.md`, and `DEPLOY.md § 5` in the same commit.
 `POST /api/session/signin` → bridge `POST /signin/:workspaceId` →
 `publisher.beginSignIn`.
 
+Both the sign-in and the status call take an optional `platform`, defaulting to
+the workspace's own network: one identity can hold accounts on several networks,
+and each is a separate session that must be read on its own.
+
 - Opens the network's own login page **in that workspace's tab** via
   `ShellWindow.openOrFocusTab`. One tab per workspace: a workspace *is* an
   account, so a second tab is the same session shown twice.
@@ -245,6 +249,9 @@ one, update this table, `README.md`, and `DEPLOY.md § 5` in the same commit.
   (`GET /api/session/status`). The UI polls it for up to three minutes after
   opening and flips its badge only on that evidence.
 - The login view gets no preload, and nothing in this codebase touches the form.
+- The Accounts page is the main entry: adding an account registers the row and
+  opens that network's login page immediately, and an account's badge is written
+  only from a session read — never from a tab having been opened.
 
 `adapters.ts` carries a `signInUrl` per network; that is the only thing sign-in
 needs from an adapter.

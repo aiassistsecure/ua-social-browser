@@ -8,4 +8,8 @@
 
 export type GetSessionStatusParams = {
 workspaceId: string;
+/**
+ * Which network's session to read inside this workspace. Defaults to the workspace's own platform. A workspace may hold accounts on more than one network, and each is a separate session.
+ */
+platform?: string;
 };

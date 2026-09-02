@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { Link2, Link2Off, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Loader2, LogIn, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { getSessionStatus, useBeginSignIn } from '@workspace/api-client-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -33,6 +34,10 @@ import {
 } from '@/lib/workspace';
 import type { Platform } from '@/types';
 
+/** How often, and for how long, a sign-in in progress is checked for. */
+const POLL_MS = 3_000;
+const WATCH_MS = 3 * 60_000;
+
 export function Accounts({ state, updateState, workspace }: SectionProps) {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -40,37 +45,175 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
   const [displayName, setDisplayName] = useState('');
   const [platform, setPlatform] = useState<Platform>(workspace.platform);
 
+  const signIn = useBeginSignIn();
+  /** The account whose sign-in tab is open, if any. */
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
+
   const accounts = state.accounts.filter(
     (account) => account.workspaceId === workspace.id,
   );
 
-  function toggleConnection(accountId: string) {
+  const pending = accounts.find((account) => account.id === pendingId) ?? null;
+  const pendingPlatform = pending?.platform ?? null;
+
+  /**
+   * The badge is a claim about a session, so it is only ever written from one.
+   * Nothing here marks an account signed in because a tab was opened or a form
+   * was filled in — that is the difference between this app and a dashboard
+   * that guesses.
+   */
+  function recordSession(accountId: string, authenticated: boolean) {
     updateState((current) => {
       const account = current.accounts.find((item) => item.id === accountId);
-      if (!account) return current;
-      const connected = !account.connected;
+      if (!account || account.connected === authenticated) return current;
+
       return {
         ...current,
         accounts: current.accounts.map((item) =>
-          item.id === accountId ? { ...item, connected } : item,
+          item.id === accountId ? { ...item, connected: authenticated } : item,
         ),
         activity: logActivity(current, {
           type: 'workspace',
-          title: connected ? 'Account linked' : 'Account unlinked',
-          detail: `${account.handle} · ${workspace.name}`,
+          title: authenticated ? 'Account signed in' : 'Account signed out',
+          detail: `${account.handle} · ${PLATFORM_LABEL[account.platform]} · read from the workspace session`,
         }),
       };
     });
   }
 
+  const recordSessionRef = useRef(recordSession);
+  recordSessionRef.current = recordSession;
+
+  /**
+   * Signing in happens in the network's own page, in this workspace's tab, so
+   * this view cannot watch it. It asks the session itself until the account
+   * shows up, then stops. Three minutes is long enough for a second factor;
+   * after that it gives up quietly rather than polling forever.
+   */
+  useEffect(() => {
+    if (!pendingId || !pendingPlatform) return;
+
+    const startedAt = Date.now();
+    let cancelled = false;
+
+    const timer = window.setInterval(() => {
+      if (Date.now() - startedAt > WATCH_MS) {
+        setPendingId(null);
+        return;
+      }
+
+      void getSessionStatus({
+        workspaceId: workspace.id,
+        platform: pendingPlatform,
+      })
+        .then((status) => {
+          if (cancelled || !status.bridgeAvailable) return;
+          if (!status.authenticated) return;
+          recordSessionRef.current(pendingId, true);
+          setPendingId(null);
+          toast({
+            title: 'Signed in',
+            description: status.detail,
+          });
+        })
+        .catch(() => {
+          // A failed check says nothing about the account, so it changes
+          // nothing. The next tick tries again.
+        });
+    }, POLL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pendingId, pendingPlatform, workspace.id, toast]);
+
+  /**
+   * Opens the network's own login page in this workspace's tab. The account
+   * row is bookkeeping; this is the part that matters, so every path that
+   * registers an account offers it immediately.
+   */
+  async function startSignIn(accountId: string, target: Platform) {
+    const label = PLATFORM_LABEL[target];
+
+    try {
+      const invitation = await signIn.mutateAsync({
+        data: { workspaceId: workspace.id, platform: target },
+      });
+
+      if (invitation.alreadySignedIn) {
+        // The shell read the session to answer this, so it is evidence.
+        recordSession(accountId, true);
+        setPendingId(null);
+      } else {
+        setPendingId(invitation.opened ? accountId : null);
+      }
+
+      toast({
+        title: invitation.alreadySignedIn
+          ? `Already signed in to ${label}`
+          : invitation.opened
+            ? `Sign in to ${label} in this workspace's tab`
+            : 'No sign-in was opened',
+        description: invitation.detail,
+        variant: invitation.opened || invitation.alreadySignedIn ? undefined : 'destructive',
+      });
+    } catch {
+      setPendingId(null);
+      toast({
+        title: 'Could not start a sign-in',
+        description:
+          'The workspace API did not answer, so no page was opened and nothing about this account changed.',
+        variant: 'destructive',
+      });
+    }
+  }
+
+  /** Re-reads the session behind one account and rewrites its badge from that. */
+  async function checkAccount(accountId: string, target: Platform) {
+    setCheckingId(accountId);
+    try {
+      const status = await getSessionStatus({
+        workspaceId: workspace.id,
+        platform: target,
+      });
+
+      if (!status.bridgeAvailable) {
+        // Unknown is not the same as signed out, so the badge is left alone.
+        toast({
+          title: 'Cannot read this session here',
+          description: status.detail,
+        });
+        return;
+      }
+
+      recordSession(accountId, status.authenticated);
+      toast({
+        title: status.authenticated ? 'Signed in' : 'Not signed in',
+        description: status.detail,
+      });
+    } catch {
+      toast({
+        title: 'Session check failed',
+        description:
+          'The workspace API did not answer. The badge still shows the last session that was actually read.',
+        variant: 'destructive',
+      });
+    } finally {
+      setCheckingId(null);
+    }
+  }
+
   function removeAccount(accountId: string) {
+    if (pendingId === accountId) setPendingId(null);
     updateState((current) => ({
       ...current,
       accounts: current.accounts.filter((item) => item.id !== accountId),
     }));
   }
 
-  function addAccount() {
+  async function addAccount() {
     const normalizedHandle = handle.trim();
     const normalizedName = displayName.trim();
     if (!normalizedHandle || !normalizedName) {
@@ -81,14 +224,17 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
       return;
     }
 
+    const id = createId('account');
+    const target = platform;
+
     updateState((current) => ({
       ...current,
       accounts: [
         ...current.accounts,
         {
-          id: createId('account'),
+          id,
           workspaceId: workspace.id,
-          platform,
+          platform: target,
           handle: normalizedHandle.startsWith('@')
             ? normalizedHandle
             : `@${normalizedHandle}`,
@@ -107,12 +253,17 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
     setHandle('');
     setDisplayName('');
     setOpen(false);
+
+    // Adding an account is the operator saying "I want to use this account
+    // here", so the login page comes straight up rather than waiting behind a
+    // second button they have to find.
+    await startSignIn(id, target);
   }
 
   return (
     <SectionShell
       title="Accounts"
-      description={`Accounts registered to ${workspace.name}. Sign-in happens in the workspace's own browsing context, so credentials and cookies stay inside this profile.`}
+      description={`Accounts registered to ${workspace.name}. Signing in opens the network's own login page in this workspace's tab, under its isolated session — this app never sees the credentials, and an account is only marked signed in when the session itself says so.`}
       actions={
         <Button onClick={() => setOpen(true)} data-testid="button-add-account">
           <Plus className="mr-2 h-4 w-4" />
@@ -128,69 +279,94 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
-          {accounts.map((account) => (
-            <Card key={account.id} data-testid={`account-${account.id}`}>
-              <CardContent className="flex items-center gap-3 p-4">
-                <div
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
-                  style={{
-                    backgroundColor: `${workspace.accent}22`,
-                    color: workspace.accent,
-                  }}
-                >
-                  {account.avatar}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {account.displayName}
-                  </p>
-                  <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-                    <PlatformGlyph
-                      platform={account.platform}
-                      className="h-3 w-3"
-                    />
-                    {account.handle}
-                  </p>
-                </div>
-                <span
-                  className={cn(
-                    'rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide',
-                    account.connected
-                      ? 'border-chart-2/50 text-chart-2'
-                      : 'border-border text-muted-foreground',
-                  )}
-                >
-                  {account.connected ? 'Linked' : 'Not linked'}
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    aria-label={account.connected ? 'Unlink' : 'Link'}
-                    onClick={() => toggleConnection(account.id)}
-                    data-testid={`button-toggle-${account.id}`}
+          {accounts.map((account) => {
+            const awaiting = pendingId === account.id;
+            const checking = checkingId === account.id;
+
+            return (
+              <Card key={account.id} data-testid={`account-${account.id}`}>
+                <CardContent className="flex items-center gap-3 p-4">
+                  <div
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
+                    style={{
+                      backgroundColor: `${workspace.accent}22`,
+                      color: workspace.accent,
+                    }}
                   >
-                    {account.connected ? (
-                      <Link2Off className="h-4 w-4" />
-                    ) : (
-                      <Link2 className="h-4 w-4" />
+                    {account.avatar}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">
+                      {account.displayName}
+                    </p>
+                    <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                      <PlatformGlyph
+                        platform={account.platform}
+                        className="h-3 w-3"
+                      />
+                      {account.handle}
+                    </p>
+                  </div>
+                  <span
+                    className={cn(
+                      'rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide',
+                      account.connected
+                        ? 'border-chart-2/50 text-chart-2'
+                        : 'border-border text-muted-foreground',
                     )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    aria-label="Remove account"
-                    onClick={() => removeAccount(account.id)}
-                    data-testid={`button-remove-${account.id}`}
+                    data-testid={`status-${account.id}`}
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                    {account.connected ? 'Signed in' : 'Not signed in'}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {!account.connected ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          void startSignIn(account.id, account.platform)
+                        }
+                        disabled={signIn.isPending || awaiting}
+                        data-testid={`button-signin-${account.id}`}
+                      >
+                        {awaiting ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <LogIn className="mr-2 h-4 w-4" />
+                        )}
+                        {awaiting ? 'Waiting' : 'Sign in'}
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      aria-label="Re-read this session"
+                      onClick={() =>
+                        void checkAccount(account.id, account.platform)
+                      }
+                      disabled={checking}
+                      data-testid={`button-check-${account.id}`}
+                    >
+                      <RefreshCw
+                        className={cn('h-4 w-4', checking && 'animate-spin')}
+                      />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      aria-label="Remove account"
+                      onClick={() => removeAccount(account.id)}
+                      data-testid={`button-remove-${account.id}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -211,8 +387,9 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
           <DialogHeader>
             <DialogTitle>Add an account</DialogTitle>
             <DialogDescription>
-              Registers the account with this workspace. You still sign in
-              yourself inside the workspace's browsing context.
+              Registers the account with this workspace and opens the network's
+              own sign-in page in this workspace's tab. You sign in yourself;
+              the session stays inside this workspace's profile.
             </DialogDescription>
           </DialogHeader>
 
@@ -261,8 +438,17 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
             <Button variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={addAccount} data-testid="button-save-account">
-              Add account
+            <Button
+              onClick={() => void addAccount()}
+              disabled={signIn.isPending}
+              data-testid="button-save-account"
+            >
+              {signIn.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <LogIn className="mr-2 h-4 w-4" />
+              )}
+              Add and sign in
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -132,6 +132,8 @@ export interface SessionStatus {
 
 export interface SignInRequest {
   workspaceId: string;
+  /** Which network to sign in to inside this workspace. Defaults to the workspace's own platform. The login page always opens in this workspace's tab, under its isolated session and UA profile. */
+  platform?: string;
 }
 
 export interface SignInInvitation {
@@ -208,5 +210,9 @@ export interface PublishResult {
 
 export type GetSessionStatusParams = {
 workspaceId: string;
+/**
+ * Which network's session to read inside this workspace. Defaults to the workspace's own platform. A workspace may hold accounts on more than one network, and each is a separate session.
+ */
+platform?: string;
 };
 

@@ -126,7 +126,12 @@ router.get("/session/status", async (req, res) => {
     return res.status(400).json({ error: "workspaceId is required" });
   }
 
-  const status = await readSessionStatus(workspaceId);
+  const platform =
+    typeof req.query.platform === "string" && req.query.platform.trim() !== ""
+      ? req.query.platform.trim()
+      : undefined;
+
+  const status = await readSessionStatus(workspaceId, platform);
   return res.json(GetSessionStatusResponse.parse(status));
 });
 
@@ -144,7 +149,10 @@ router.post("/session/signin", async (req, res) => {
     return res.status(400).json({ error: "workspaceId is required" });
   }
 
-  const invitation = await beginSignIn(parsed.data.workspaceId);
+  const invitation = await beginSignIn(
+    parsed.data.workspaceId,
+    parsed.data.platform,
+  );
 
   req.log.info(
     {

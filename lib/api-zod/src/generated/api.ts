@@ -22,7 +22,8 @@ export const GetTenantResponse = zod.object({
  * @summary Report whether a workspace session can post right now
  */
 export const GetSessionStatusQueryParams = zod.object({
-  "workspaceId": zod.coerce.string()
+  "workspaceId": zod.coerce.string(),
+  "platform": zod.coerce.string().optional().describe('Which network\'s session to read inside this workspace. Defaults to the workspace\'s own platform. A workspace may hold accounts on more than one network, and each is a separate session.')
 })
 
 export const GetSessionStatusResponse = zod.object({
@@ -39,7 +40,8 @@ export const GetSessionStatusResponse = zod.object({
  * @summary Open a live sign-in for a workspace inside the desktop shell
  */
 export const BeginSignInBody = zod.object({
-  "workspaceId": zod.string()
+  "workspaceId": zod.string(),
+  "platform": zod.string().optional().describe('Which network to sign in to inside this workspace. Defaults to the workspace\'s own platform. The login page always opens in this workspace\'s tab, under its isolated session and UA profile.')
 })
 
 export const BeginSignInResponse = zod.object({

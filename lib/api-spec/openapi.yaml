@@ -42,6 +42,15 @@ paths:
           required: true
           schema:
             type: string
+        - name: platform
+          in: query
+          required: false
+          description: >-
+            Which network's session to read inside this workspace. Defaults to
+            the workspace's own platform. A workspace may hold accounts on more
+            than one network, and each is a separate session.
+          schema:
+            type: string
       responses:
         "200":
           description: Session status
@@ -284,6 +293,12 @@ components:
       properties:
         workspaceId:
           type: string
+        platform:
+          type: string
+          description: >-
+            Which network to sign in to inside this workspace. Defaults to the
+            workspace's own platform. The login page always opens in this
+            workspace's tab, under its isolated session and UA profile.
     SignInInvitation:
       type: object
       required: [workspaceId, bridgeAvailable, opened, alreadySignedIn, detail]

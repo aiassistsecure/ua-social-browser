@@ -96,7 +96,10 @@ export function createPublisher(deps: {
     };
   }
 
-  async function sessionStatus(workspaceId: string): Promise<SessionSnapshot> {
+  async function sessionStatus(
+    workspaceId: string,
+    platform?: string,
+  ): Promise<SessionSnapshot> {
     const entry = await directory.resolve(workspaceId);
     if (!entry) {
       return {
@@ -105,11 +108,15 @@ export function createPublisher(deps: {
       };
     }
 
-    const adapter = adapterFor(entry.platform);
+    // A workspace has a primary network, but one identity can hold accounts on
+    // several. Each network is read on its own: a session on one is no
+    // evidence at all about another.
+    const wanted = platform ?? entry.platform;
+    const adapter = adapterFor(wanted);
     if (!adapter) {
       return {
         authenticated: false,
-        detail: `No adapter for ${entry.platform}; this shell cannot read that network's session.`,
+        detail: `No adapter for ${wanted}; this shell cannot read that network's session.`,
       };
     }
 
@@ -206,7 +213,10 @@ export function createPublisher(deps: {
    *  - Success is not declared here. It is read back from the cookie jar by
    *    `sessionStatus`, so a closed window never turns into a false badge.
    */
-  async function beginSignIn(workspaceId: string): Promise<SignInInvitation> {
+  async function beginSignIn(
+    workspaceId: string,
+    platform?: string,
+  ): Promise<SignInInvitation> {
     const entry = await directory.resolve(workspaceId);
     if (!entry) {
       return {
@@ -216,12 +226,16 @@ export function createPublisher(deps: {
       };
     }
 
-    const adapter = adapterFor(entry.platform);
+    // Signing in to a second network inside the same workspace is a normal
+    // thing to want: the identity is the workspace, and the accounts hang off
+    // it. The tab is the workspace's either way, so the session stays isolated.
+    const wanted = platform ?? entry.platform;
+    const adapter = adapterFor(wanted);
     if (!adapter) {
       return {
         opened: false,
         alreadySignedIn: false,
-        detail: `No adapter for ${entry.platform}; this shell does not know where that network's sign-in lives.`,
+        detail: `No adapter for ${wanted}; this shell does not know where that network's sign-in lives.`,
       };
     }
 
@@ -252,7 +266,7 @@ export function createPublisher(deps: {
       };
     }
 
-    log.info("Opened a live sign-in tab", { workspaceId, platform: entry.platform });
+    log.info("Opened a live sign-in tab", { workspaceId, platform: wanted });
 
     return {
       opened: true,

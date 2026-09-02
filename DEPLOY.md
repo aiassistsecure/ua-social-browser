@@ -293,11 +293,13 @@ with a `detail` and nothing else happens — including the sign-in route, becaus
 opening a tab in the operator's browser is a real side effect, not a read.
 
 ```
-GET /session/:workspaceId
+GET /session/:workspaceId[?platform=x]
   200 { authenticated: boolean, accountHandle?: string, detail?: string }
 
 POST /signin/:workspaceId
+  body (optional) { platform?: string }
   200 { opened: boolean, alreadySignedIn: boolean, detail: string }
+  400 { detail }  → the body was sent but could not be read
 
 POST /publish
   body { workspaceId, draftId, platform, body, idempotencyKey }
@@ -376,10 +378,17 @@ the network sets in that partition is the whole of the account.
 The response says what happened to the *tab*, not to the account:
 
 ```
-POST /api/session/signin  { workspaceId }
+POST /api/session/signin  { workspaceId, platform? }
   200 { workspaceId, bridgeAvailable, opened, alreadySignedIn, detail }
   400 { error: "workspaceId is required" }
 ```
+
+`platform` is optional and defaults to the workspace's own network. It exists
+because one identity can hold accounts on several networks — the Accounts page
+signs each of them in inside the same workspace tab, and reads each back
+separately with `GET /api/session/status?workspaceId=…&platform=…`. A session on
+one network is no evidence about another, so a badge is never drawn from a
+sibling's session.
 
 `opened: true` means a login page is now in front of the operator. Whether they
 finished — a human sign-in takes minutes and often a second factor — is answered

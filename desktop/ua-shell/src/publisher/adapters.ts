@@ -93,6 +93,9 @@ function driven(label: string, config: ComposerConfig) {
       media: context.media,
       canAttach: config.fileInput !== undefined,
       reportsMediaReady: config.mediaAttached !== undefined,
+      mediaRequired: config.mediaRequired === true,
+      mediaFirst: config.mediaFirst === true,
+      afterAttach: config.afterAttach,
       deadline: context.deadline,
       allowHotkey: config.submitHotkey === true,
       hasOpener: config.opener !== undefined,
@@ -373,6 +376,78 @@ const COMPOSERS: Record<string, ComposerConfig> = {
       errorText: "went wrong|couldn't|could not|failed|try again",
     },
   },
+  /**
+   * Instagram is upload-first and multi-screen: choose a file, crop, filter,
+   * then caption, then share. There is no caption field at all until the image
+   * is in, which is why the flow waits for the upload control rather than an
+   * editor.
+   *
+   * The two "Next" buttons carry the same accessible name, so each is taken in
+   * order and each waits for the screen it should have produced — otherwise a
+   * double-click on the crop step would look like progress and land the flow on
+   * the wrong screen with no way to tell.
+   */
+  instagram: {
+    opener:
+      'svg[aria-label="New post"], a[href="#"][role="link"] svg[aria-label="New post"], div[role="button"]:has(svg[aria-label="New post"])',
+    fileInput: 'input[type="file"][accept*="image"]',
+    mediaAttached: 'div[role="dialog"] img[src^="blob:"], div[role="dialog"] canvas',
+    mediaRequired: true,
+    mediaFirst: true,
+    afterAttach: [
+      {
+        click: 'div[role="dialog"] div[role="button"]:not([aria-disabled="true"])',
+        waitFor: 'div[role="dialog"]',
+        label: "crop",
+      },
+      {
+        click: 'div[role="dialog"] div[role="button"]:not([aria-disabled="true"])',
+        waitFor: 'div[role="dialog"] textarea, div[role="dialog"] div[contenteditable="true"]',
+        label: "filter",
+      },
+    ],
+    editor:
+      'div[role="dialog"] textarea[aria-label*="aption"], div[role="dialog"] div[contenteditable="true"][role="textbox"]',
+    editorKind: "contenteditable",
+    submit: 'div[role="dialog"] div[role="button"]:not([aria-disabled="true"])',
+    login: { selectors: 'input[name="password"]', pathPattern: "^/accounts/login" },
+    confirmation: {
+      successText: "post shared|your post has been shared",
+      errorText: "went wrong|couldn't|could not|failed|try again",
+    },
+  },
+  /**
+   * Pinterest's pin builder is upload-first but single-screen: once the image
+   * is in, the title, description and board controls are all on the page.
+   *
+   * The draft's body goes in the description, which is the caption equivalent;
+   * the title is left empty, which Pinterest accepts.
+   *
+   * BOARD SELECTION IS NOT MODELLED. A pin belongs to a board, and this build
+   * has no way to know which one — so it publishes to whatever board Pinterest
+   * already has selected. When none is selected, the publish button never
+   * enables and the attempt fails loudly rather than guessing. That is the
+   * honest behaviour, but it is a real limit: check which board is selected
+   * before trusting a scheduled pin.
+   */
+  pinterest: {
+    fileInput: 'input[type="file"][accept*="image"], [data-test-id="media-upload-input"] input[type="file"]',
+    mediaAttached: '[data-test-id="pin-draft-image"] img, img[src^="blob:"]',
+    mediaRequired: true,
+    mediaFirst: true,
+    editor:
+      '[data-test-id="pin-draft-description"] div[contenteditable="true"], div[contenteditable="true"][aria-label*="escription"]',
+    editorKind: "contenteditable",
+    submit: '[data-test-id="board-dropdown-save-button"] button, button[type="submit"]',
+    login: { pathPattern: "^/login" },
+    confirmation: {
+      postLink: 'a[href*="/pin/"]',
+      postUrlPattern: "/pin/(\\d+)",
+      successText: "your pin (was|has been) (published|saved)|pin created",
+      errorText: "went wrong|couldn't|could not|failed|try again",
+      stillComposingPath: "pin-builder",
+    },
+  },
   tumblr: {
     editor: 'div[contenteditable="true"][role="textbox"], .post-form--content [contenteditable="true"]',
     editorKind: "contenteditable",
@@ -388,17 +463,16 @@ const COMPOSERS: Record<string, ComposerConfig> = {
 };
 
 /**
- * Networks that take a picture or a video, not a paragraph.
+ * The two networks that want a video specifically.
  *
- * A draft can carry an image now, so the old reason — "a draft carries text" —
- * stopped being true the moment attachments shipped. What is still true is
- * that none of these post through a single composer: each is a multi-step
- * flow (choose, crop, filter, describe, share) that the shared driver cannot
- * express, and none has been built. Saying so is the difference between a
- * limit an operator can wait out and one they cannot.
+ * Instagram and Pinterest were in this group until attachments shipped; both
+ * are driven now. These two are not, and the reason is narrower than it was: a
+ * post here needs a *video*, and a draft carries images and video files but
+ * nothing that makes an encode, a thumbnail, or YouTube Studio's own multi-page
+ * upload wizard into something the composer flow can walk.
  */
 const MEDIA_REQUIRED =
-  "posting here is a multi-step upload flow that this build does not drive yet, and a post needs an image or video, so there is no text-only route either.";
+  "a post here needs a video, and this build drives image composers rather than a video upload wizard. Attaching an MP4 to a draft does not change that yet.";
 
 const ADAPTERS: PlatformAdapter[] = [
   {
@@ -415,9 +489,9 @@ const ADAPTERS: PlatformAdapter[] = [
     label: "Instagram",
     origin: "https://www.instagram.com",
     signInUrl: "https://www.instagram.com/accounts/login/",
-    composeUrl: "https://www.instagram.com/create/style/",
+    composeUrl: "https://www.instagram.com/",
     detection: { kind: "cookie", names: ["sessionid"] },
-    submit: cannotPost("Instagram", MEDIA_REQUIRED),
+    submit: driven("Instagram", COMPOSERS.instagram!),
   },
   {
     platform: "facebook",
@@ -507,7 +581,7 @@ const ADAPTERS: PlatformAdapter[] = [
     signInUrl: "https://www.pinterest.com/login/",
     composeUrl: "https://www.pinterest.com/pin-builder/",
     detection: { kind: "cookie", names: ["_pinterest_sess"] },
-    submit: cannotPost("Pinterest", MEDIA_REQUIRED),
+    submit: driven("Pinterest", COMPOSERS.pinterest!),
   },
   {
     platform: "tumblr",

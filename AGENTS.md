@@ -228,7 +228,8 @@ unfinished attempt means.
 | --- | --- |
 | X | Bespoke adapter with its own selectors and submit flow; the reference implementation. **Verified 2026-09-02:** the owner watched one real post land on a real account (`@interchained`) from the macOS shell — the review card flipped to posted and "View it on X" resolved to the live status. One post, one account, one OS; that is the whole of the evidence. |
 | LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr | Driven through `compose-driver.ts`. **Selectors written from product knowledge, never run against a real signed-in account.** |
-| Instagram, TikTok, YouTube, Pinterest | Refuse: posting is a multi-step upload flow (choose, crop, filter, describe, share) that the shared driver cannot express, and there is no text-only route. Drafts *can* carry media now, so the old reason — "a draft carries text" — no longer applies; the flow is what is missing. |
+| Instagram, Pinterest | Driven, upload-first: the flow waits for the upload control, attaches, walks any screens in between, and only then types the caption — there is no caption field until an image is in. Both refuse a post with no attachment. Instagram walks crop and filter via `afterAttach`; Pinterest is single-screen. **Selectors unverified, same as the six above.** Pinterest does not model board selection — see `adapters.ts`. |
+| TikTok, YouTube | Refuse: a post needs a *video*, and this build drives image composers rather than an encode-and-wizard upload flow. |
 | Reddit | Refuses: needs a community and a title the draft model does not carry. |
 
 A refusal names its own reason and points at the workspace tab. There is no
@@ -351,10 +352,15 @@ signed under; the ledger is not rewritten.
 are stored content-addressed by `artifacts/api-server/src/lib/media-store.ts`,
 handed to the shell as paths, and attached with CDP `DOM.setFileInputFiles`
 (the debugger is already attached for UA emulation, so it is reused). The four
-media-required networks and Reddit still refuse; unlocking them needs a
-step-machine the four-phase composer flow does not have, and Pinterest is the
-cheapest one to do first. **Not verified:** no file-input selector here has been
-run against a real signed-in account.
+Instagram and Pinterest are driven too, through an upload-first path with
+optional `afterAttach` steps for Instagram's crop and filter screens. TikTok,
+YouTube and Reddit still refuse. **Not verified:** no file-input selector or
+step selector here has been run against a real signed-in account.
+
+**Pinterest posts to whichever board is already selected.** A pin belongs to a
+board and nothing in the draft model names one, so the flow does not choose:
+when no board is selected the publish button never enables and the attempt
+fails loudly. Check the selected board before trusting a scheduled pin.
 
 **Not built:** signed installers per OS, per-tab UA switching (it is per
 workspace), a sign-in indicator on the shell's own tab strip, any real

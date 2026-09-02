@@ -58,8 +58,22 @@ product knowledge and has never run against a real signed-in account. A drifted
 selector surfaces as a loud refusal, not a phantom post — but treat the
 selectors as unproven until someone watches a picture land.
 
-**Still refusing:** Instagram, TikTok, YouTube, Pinterest. Not because a draft
-cannot carry media any more — it can — but because each posts through a
-multi-step flow (choose, crop, filter, describe, share) that the four-phase
-composer driver cannot express. Pinterest is the cheapest to unlock first: one
-step, image plus caption.
+**Upload-first networks.** Instagram and Pinterest have no caption field until
+an image is in, so `mediaFirst` flips the order: wait for the *upload control*
+rather than an editor, attach, walk any `afterAttach` screens, then look for
+somewhere to type. `mediaRequired` refuses a post with no attachment before a
+window is even opened. Instagram's crop and filter screens are two `afterAttach`
+steps, each naming itself so a stalled flow says which screen it stalled on
+rather than timing out anonymously; clicking is not treated as progress until
+the screen it should have produced actually appears.
+
+**Pinterest does not choose a board.** A pin belongs to a board and nothing in
+the draft model names one, so it publishes to whatever board Pinterest already
+has selected. With none selected the publish button never enables and the
+attempt fails loudly. That is honest but it is a real limit — check the selected
+board before trusting a scheduled pin. Giving the draft model a board is the
+same shape of problem as Reddit's subreddit.
+
+**Still refusing:** TikTok and YouTube (a post needs a video, and this drives
+image composers rather than an encode-and-wizard flow) and Reddit (needs a
+community and a title).

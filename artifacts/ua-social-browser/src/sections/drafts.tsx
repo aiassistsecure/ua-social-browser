@@ -320,6 +320,17 @@ export function Drafts({
   }
 
   function requestPublish(draft: Draft) {
+    // The composer refuses this too, but finding out after a window has opened
+    // and a network has been driven is a slow way to learn something the app
+    // already knew.
+    if (platformProfile(draft.platform).requiresMedia && draft.media.length === 0) {
+      toast({
+        title: 'Needs a picture',
+        description: `${platformProfile(draft.platform).label} does not take a post without an image or video. Attach one and approve it again.`,
+        variant: 'destructive',
+      });
+      return;
+    }
     if (recordedApproval(draft) === null) {
       toast({
         title: 'Approval required',
@@ -475,6 +486,7 @@ export function Drafts({
               draft.status === 'published' || draft.status === 'publishing';
             const isSending = sendingId === draft.id;
             const approved = Boolean(draft.approvedAt);
+            const needsMedia = network.requiresMedia && draft.media.length === 0;
             // No time set is not an unfinished schedule — it is the normal
             // case: it goes out when a person presses Post.
             const immediate = draft.scheduledFor === null;
@@ -772,7 +784,12 @@ export function Drafts({
                           </Button>
                           <Button
                             size="sm"
-                            disabled={overLimit || isSending}
+                            disabled={overLimit || isSending || needsMedia}
+                            title={
+                              needsMedia
+                                ? `${network.label} needs an image or video`
+                                : undefined
+                            }
                             onClick={() => requestPublish(draft)}
                             data-testid={`button-publish-${draft.id}`}
                           >

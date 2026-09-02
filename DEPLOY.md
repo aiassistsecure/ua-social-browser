@@ -260,10 +260,12 @@ token and no headless impersonation anywhere in this path.
   adapter; LinkedIn, Facebook, Threads, Bluesky, Mastodon and Tumblr run through
   the shared composer flow in `src/publisher/compose-driver.ts` (probe the page,
   open the composer, type, submit, wait for the network's confirmation).
-  Instagram, TikTok, YouTube and Pinterest refuse because posting there is a
-  multi-step upload flow this build does not drive, with no text-only route;
-  Reddit refuses because it needs a community and a title the draft model does
-  not carry. A refusal names its
+  Instagram and Pinterest are driven upload-first: the picture goes in before
+  the caption, and a post with no attachment is refused. TikTok and YouTube
+  refuse because a post there needs a video and an upload wizard this build
+  does not drive; Reddit refuses because it needs a community and a title the
+  draft model does not carry. Pinterest publishes to whichever board is
+  already selected — it does not choose one. A refusal names its
   reason and points at the workspace tab; the draft stays approved.
   *Verified:* X, on 2026-09-02 — one real post from the macOS shell, confirmed
   by X, shown as posted with a live link. *Unverified:* the six shared-composer

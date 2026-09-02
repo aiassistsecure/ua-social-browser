@@ -180,7 +180,6 @@ describe(
           platform: "x",
           body: "hello from the shell",
           approval: APPROVAL,
-          idempotencyKey: "draft-ok:1",
         }),
       });
       const payload = (await response.json()) as { status?: string; postUrl?: string };
@@ -189,6 +188,28 @@ describe(
       assert.equal(payload.status, "published");
       assert.match(String(payload.postUrl), /^https:\/\/x\.com\/acme\/status\/\d+$/);
       assert.deepEqual(published, ["draft-ok"]);
+    });
+
+    test("a caller cannot bring its own idempotency key", async () => {
+      // A post is identified by its draft and the approval it carries. If a
+      // caller could name the key, two invented names for one post would each
+      // look new, and each would post.
+      published = [];
+      const response = await fetch(`${apiBase}/api/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-UA-Api-Token": API_TOKEN },
+        body: JSON.stringify({
+          workspaceId: "ws-a",
+          draftId: "draft-ok",
+          platform: "x",
+          body: "hello from the shell",
+          approval: APPROVAL,
+          idempotencyKey: "draft-ok:1",
+        }),
+      });
+
+      assert.equal(response.status, 400);
+      assert.deepEqual(published, [], "nothing may be posted on a refused key");
     });
 
     test("an untokened local caller never reaches the publisher", async () => {

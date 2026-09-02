@@ -197,7 +197,9 @@ export function Drafts({ state, updateState, workspace }: SectionProps) {
             approvedBy: draft.approvedBy ?? operator,
             approvedAt: draft.approvedAt ?? new Date().toISOString(),
           },
-          idempotencyKey: `${draft.id}:${draft.approvedAt ?? ''}`,
+          // No idempotency key: the server derives it from the stored draft and
+          // its approval, and refuses a different one. Sending our own could
+          // only ever disagree with the record and be refused.
         },
       });
 

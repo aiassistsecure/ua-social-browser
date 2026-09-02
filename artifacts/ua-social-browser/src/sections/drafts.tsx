@@ -8,13 +8,13 @@ import {
   RotateCcw,
   Send,
   Trash2,
-  Undo2,
 } from 'lucide-react';
 import { usePublishPost } from '@workspace/api-client-react';
 import type { PublishRequestPlatform } from '@workspace/api-client-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
@@ -202,6 +202,30 @@ export function Drafts({
     });
   }
 
+  /**
+   * Most posts go out the moment the operator presses Post, so that is the
+   * default and a time is the exception. Turning the clock off clears the time
+   * rather than remembering it: a stored time nobody can see is the kind of
+   * thing that sends a post at 3am a week later.
+   */
+  function setImmediate(draft: Draft, immediate: boolean) {
+    if (immediate) {
+      patchDraft(draft.id, {
+        scheduledFor: null,
+        status: draft.status === 'scheduled' ? 'approved' : draft.status,
+      });
+      return;
+    }
+
+    // The same value the picker shows when it is empty, so the operator sees
+    // exactly the time they are agreeing to.
+    const suggested = fromLocalInputValue(toLocalInputValue(null));
+    patchDraft(draft.id, {
+      scheduledFor: suggested,
+      status: draft.approvedAt && suggested ? 'scheduled' : draft.status,
+    });
+  }
+
   function requestPublish(draft: Draft) {
     if (!draft.approvedAt) {
       toast({
@@ -318,6 +342,9 @@ export function Drafts({
               draft.status === 'published' || draft.status === 'publishing';
             const isSending = sendingId === draft.id;
             const approved = Boolean(draft.approvedAt);
+            // No time set is not an unfinished schedule — it is the normal
+            // case: it goes out when a person presses Post.
+            const immediate = draft.scheduledFor === null;
 
             return (
               <Card
@@ -400,24 +427,46 @@ export function Drafts({
 
                   <div className="flex flex-wrap items-end justify-between gap-3">
                     <div className="flex flex-wrap items-end gap-3">
-                      <div className="space-y-1">
-                        <Label
-                          htmlFor={`schedule-${draft.id}`}
-                          className="text-xs text-muted-foreground"
-                        >
-                          Send at
-                        </Label>
-                        <Input
-                          id={`schedule-${draft.id}`}
-                          type="datetime-local"
-                          disabled={locked}
-                          value={toLocalInputValue(draft.scheduledFor)}
-                          onChange={(event) =>
-                            schedule(draft, event.target.value)
-                          }
-                          className="h-9 w-[210px]"
-                          data-testid={`input-schedule-${draft.id}`}
-                        />
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id={`immediate-${draft.id}`}
+                            checked={immediate}
+                            disabled={locked}
+                            onCheckedChange={(checked) =>
+                              setImmediate(draft, checked === true)
+                            }
+                            data-testid={`checkbox-immediate-${draft.id}`}
+                          />
+                          <Label
+                            htmlFor={`immediate-${draft.id}`}
+                            className="text-xs font-normal"
+                          >
+                            Post immediately
+                          </Label>
+                        </div>
+
+                        {!immediate ? (
+                          <div className="space-y-1">
+                            <Label
+                              htmlFor={`schedule-${draft.id}`}
+                              className="text-xs text-muted-foreground"
+                            >
+                              Send at
+                            </Label>
+                            <Input
+                              id={`schedule-${draft.id}`}
+                              type="datetime-local"
+                              disabled={locked}
+                              value={toLocalInputValue(draft.scheduledFor)}
+                              onChange={(event) =>
+                                schedule(draft, event.target.value)
+                              }
+                              className="h-9 w-[210px]"
+                              data-testid={`input-schedule-${draft.id}`}
+                            />
+                          </div>
+                        ) : null}
                       </div>
                       <span
                         className={cn(
@@ -432,23 +481,6 @@ export function Drafts({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {draft.status === 'scheduled' ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            patchDraft(draft.id, {
-                              status: 'approved',
-                              scheduledFor: null,
-                            })
-                          }
-                          data-testid={`button-unschedule-${draft.id}`}
-                        >
-                          <Undo2 className="mr-2 h-3.5 w-3.5" />
-                          Unschedule
-                        </Button>
-                      ) : null}
-
                       {!locked ? (
                         <Button
                           variant="ghost"
@@ -502,6 +534,18 @@ export function Drafts({
                       ) : null}
                     </div>
                   </div>
+
+                  {immediate && approved && draft.status !== 'published' ? (
+                    <>
+                      <Separator />
+                      <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Send className="h-3.5 w-3.5" />
+                        No time set: this goes out when you press Post to{' '}
+                        {network.label}, and not before. Tick the box off to
+                        give it a time instead.
+                      </p>
+                    </>
+                  ) : null}
 
                   {draft.status === 'scheduled' && draft.scheduledFor ? (
                     <>

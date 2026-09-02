@@ -50,3 +50,8 @@ Thumbs.db
 
 # runtime ledger (nedb-engine) — never commit
 .data/
+
+# local env files (never commit; .env.example is the template)
+.env
+.env.*
+!.env.example

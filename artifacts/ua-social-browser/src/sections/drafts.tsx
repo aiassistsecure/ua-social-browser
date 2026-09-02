@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -94,7 +94,20 @@ function failureMessage(error: unknown): string {
   );
 }
 
-export function Drafts({ state, updateState, workspace }: SectionProps) {
+/** How long a post arrived at from the calendar stays visibly marked. */
+const FOCUS_HIGHLIGHT_MS = 4_000;
+
+export function Drafts({
+  state,
+  updateState,
+  workspace,
+  focusedDraftId,
+  onFocusHandled,
+}: SectionProps & {
+  /** A post the operator clicked elsewhere — scroll to it and mark it. */
+  focusedDraftId?: string | null;
+  onFocusHandled?: () => void;
+}) {
   const { toast } = useToast();
   const [filter, setFilter] = useState<Filter>('all');
   const [pendingPublish, setPendingPublish] = useState<Draft | null>(null);
@@ -105,6 +118,30 @@ export function Drafts({ state, updateState, workspace }: SectionProps) {
   const drafts = draftsForWorkspace(state, workspace.id).filter((draft) =>
     matchesFilter(draft, filter),
   );
+
+  const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const focusHandled = useRef(onFocusHandled);
+  focusHandled.current = onFocusHandled;
+
+  // A post arrived at from the calendar may be filtered out of this view, so
+  // widen the filter first and scroll to it once it is actually on screen.
+  useEffect(() => {
+    if (focusedDraftId) setFilter('all');
+  }, [focusedDraftId]);
+
+  useEffect(() => {
+    if (!focusedDraftId) return;
+
+    cardRefs.current
+      .get(focusedDraftId)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    const timer = window.setTimeout(
+      () => focusHandled.current?.(),
+      FOCUS_HIGHLIGHT_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [focusedDraftId, filter]);
 
   function patchDraft(id: string, patch: Partial<Draft>) {
     updateState((current) => ({
@@ -283,7 +320,18 @@ export function Drafts({ state, updateState, workspace }: SectionProps) {
             const approved = Boolean(draft.approvedAt);
 
             return (
-              <Card key={draft.id} data-testid={`draft-${draft.id}`}>
+              <Card
+                key={draft.id}
+                ref={(node) => {
+                  if (node) cardRefs.current.set(draft.id, node);
+                  else cardRefs.current.delete(draft.id);
+                }}
+                className={cn(
+                  focusedDraftId === draft.id &&
+                    'ring-2 ring-primary ring-offset-2 ring-offset-background',
+                )}
+                data-testid={`draft-${draft.id}`}
+              >
                 <CardContent className="space-y-3 p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <PlatformGlyph platform={draft.platform} tinted />

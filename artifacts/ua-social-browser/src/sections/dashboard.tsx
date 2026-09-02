@@ -117,9 +117,11 @@ export function Dashboard({
               </p>
             ) : (
               scheduled.slice(0, 4).map((draft) => (
-                <div
+                <button
                   key={draft.id}
-                  className="flex gap-3 rounded-md border border-card-border bg-background/40 p-3"
+                  type="button"
+                  onClick={() => onNavigate('drafts', { draftId: draft.id })}
+                  className="flex w-full gap-3 rounded-md border border-card-border bg-background/40 p-3 text-left hover-elevate"
                   data-testid={`upcoming-${draft.id}`}
                 >
                   <PlatformGlyph
@@ -132,7 +134,7 @@ export function Dashboard({
                       {formatDateTime(draft.scheduledFor)}
                     </p>
                   </div>
-                </div>
+                </button>
               ))
             )}
           </CardContent>

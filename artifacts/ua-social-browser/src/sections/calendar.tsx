@@ -27,7 +27,12 @@ function isSameDay(a: Date, b: Date): boolean {
   );
 }
 
-export function Calendar({ state, workspace, onNavigate }: SectionProps) {
+export function Calendar({
+  state,
+  updateState,
+  workspace,
+  onNavigate,
+}: SectionProps) {
   const [month, setMonth] = useState(() => new Date());
   const [scope, setScope] = useState<'workspace' | 'all'>('workspace');
   const scheduler = useSchedulerStatus();
@@ -57,6 +62,24 @@ export function Calendar({ state, workspace, onNavigate }: SectionProps) {
       return { date, items };
     });
   }, [month, scheduled]);
+
+  /**
+   * The calendar is a way into a post, not just a picture of one.
+   *
+   * In "all workspaces" scope a queued post can belong to a workspace that is
+   * not the open one, and the review queue only ever shows the open workspace —
+   * so switch to the post's workspace before pointing at it, or the operator
+   * lands on a list that does not contain what they clicked.
+   */
+  function openPost(draft: Draft) {
+    if (draft.workspaceId !== workspace.id) {
+      updateState((current) => ({
+        ...current,
+        activeWorkspaceId: draft.workspaceId,
+      }));
+    }
+    onNavigate('drafts', { draftId: draft.id });
+  }
 
   const upcoming = [...scheduled].sort((a, b) =>
     (a.scheduledFor ?? '').localeCompare(b.scheduledFor ?? ''),
@@ -179,11 +202,14 @@ export function Calendar({ state, workspace, onNavigate }: SectionProps) {
                   </span>
                   <div className="mt-1 flex flex-col gap-1">
                     {items.slice(0, 2).map((draft) => (
-                      <div
+                      <button
                         key={draft.id}
-                        className="flex items-center gap-1 rounded border px-1 py-0.5 text-[10px]"
+                        type="button"
+                        onClick={() => openPost(draft)}
+                        className="flex w-full items-center gap-1 rounded border px-1 py-0.5 text-left text-[10px] hover-elevate"
                         style={{ borderColor: accentFor(draft) }}
                         title={draft.body}
+                        data-testid={`calendar-post-${draft.id}`}
                       >
                         <PlatformGlyph
                           platform={draft.platform}
@@ -197,7 +223,7 @@ export function Calendar({ state, workspace, onNavigate }: SectionProps) {
                             minute: '2-digit',
                           })}
                         </span>
-                      </div>
+                      </button>
                     ))}
                     {items.length > 2 ? (
                       <span className="text-[10px] text-muted-foreground">
@@ -231,9 +257,11 @@ export function Calendar({ state, workspace, onNavigate }: SectionProps) {
             </p>
           ) : (
             upcoming.map((draft) => (
-              <div
+              <button
                 key={draft.id}
-                className="flex items-start gap-3 rounded-md border border-card-border p-3"
+                type="button"
+                onClick={() => openPost(draft)}
+                className="flex w-full items-start gap-3 rounded-md border border-card-border p-3 text-left hover-elevate"
                 data-testid={`queue-${draft.id}`}
               >
                 <span
@@ -249,7 +277,8 @@ export function Calendar({ state, workspace, onNavigate }: SectionProps) {
                     · {formatDateTime(draft.scheduledFor)}
                   </p>
                 </div>
-              </div>
+                <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              </button>
             ))
           )}
         </CardContent>

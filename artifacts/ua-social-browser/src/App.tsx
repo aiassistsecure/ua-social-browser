@@ -34,6 +34,12 @@ const queryClient = new QueryClient({
 function Workbench() {
   const { state, updateState, status, integrity } = useBrowserState();
   const [section, setSection] = useState<Section>('dashboard');
+  const [focusedDraftId, setFocusedDraftId] = useState<string | null>(null);
+
+  function navigate(next: Section, options?: { draftId?: string }) {
+    setSection(next);
+    setFocusedDraftId(options?.draftId ?? null);
+  }
 
   // Scheduled posts are dispatched by the API server, including while this
   // page is closed. Pick up whatever happened, whichever section is open.
@@ -134,7 +140,7 @@ function Workbench() {
     updateState,
     workspace,
     profile,
-    onNavigate: setSection,
+    onNavigate: navigate,
   };
 
   return (
@@ -153,7 +159,7 @@ function Workbench() {
       <div className="flex min-h-0 flex-1">
         <SideNav
           section={section}
-          onSelect={setSection}
+          onSelect={(next) => navigate(next)}
           draftCount={counts.drafts}
           scheduledCount={counts.scheduled}
           accent={workspace.accent}
@@ -163,7 +169,13 @@ function Workbench() {
           {section === 'dashboard' ? <Dashboard {...sectionProps} /> : null}
           {section === 'network' ? <Network {...sectionProps} /> : null}
           {section === 'composer' ? <Composer {...sectionProps} /> : null}
-          {section === 'drafts' ? <Drafts {...sectionProps} /> : null}
+          {section === 'drafts' ? (
+            <Drafts
+              {...sectionProps}
+              focusedDraftId={focusedDraftId}
+              onFocusHandled={() => setFocusedDraftId(null)}
+            />
+          ) : null}
           {section === 'calendar' ? <Calendar {...sectionProps} /> : null}
           {section === 'accounts' ? <Accounts {...sectionProps} /> : null}
           {section === 'profiles' ? <ProfilesSection {...sectionProps} /> : null}

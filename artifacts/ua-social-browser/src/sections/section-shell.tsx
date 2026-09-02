@@ -7,7 +7,12 @@ export type SectionProps = {
   updateState: (updater: (current: BrowserState) => BrowserState) => void;
   workspace: Workspace;
   profile: UAProfile | undefined;
-  onNavigate: (section: Section) => void;
+  /**
+   * Move to another section, optionally pointing at one post. The calendar and
+   * the dashboard both list posts they cannot manage; handing the draft id
+   * along is what turns those lists into a way in rather than a display.
+   */
+  onNavigate: (section: Section, options?: { draftId?: string }) => void;
 };
 
 export function SectionShell({

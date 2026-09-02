@@ -61,6 +61,30 @@ export type ComposerConfig = {
    * without the picture, which is a different post from the approved one.
    */
   mediaAttached?: string;
+  /**
+   * This network will not take a text-only post.
+   *
+   * Enforced here as well as in the UI so a draft that lost its picture on the
+   * way cannot arrive at a composer that has no way to refuse it.
+   */
+  mediaRequired?: boolean;
+  /**
+   * The caption field does not exist until a file has been chosen.
+   *
+   * Instagram and Pinterest are upload-first: there is nothing to type into
+   * until an image is in. The flow waits for the upload control instead of the
+   * editor, attaches, advances, and only then looks for somewhere to type.
+   */
+  mediaFirst?: boolean;
+  /**
+   * Clicks that carry a multi-step composer from the upload to the caption —
+   * Instagram's crop and filter screens, for instance.
+   *
+   * Each step names what it is waiting for, so a screen that changes shape
+   * fails with the name of the step that could not be completed rather than
+   * as a generic timeout.
+   */
+  afterAttach?: Array<{ click: string; waitFor: string; label: string }>;
   login: { selectors?: string; pathPattern?: string };
   confirmation: {
     toast?: string;
@@ -83,7 +107,13 @@ export type ComposerConfig = {
  */
 export type ComposerPage = {
   probe(): Promise<ProbeState>;
+  /** Like `probe`, but satisfied by the upload control rather than the editor. */
+  probeUpload(): Promise<ProbeState>;
   openComposer(): Promise<boolean>;
+  /** Clicks one advance step; `false` when its control is not there yet. */
+  advance(selector: string): Promise<boolean>;
+  /** True once `selector` is on the page. */
+  present(selector: string): Promise<boolean>;
   enterText(text: string): Promise<{ ok: boolean; detail?: string }>;
   attachMedia(paths: string[]): Promise<{ ok: boolean; detail?: string }>;
   mediaReady(): Promise<boolean>;
@@ -101,6 +131,12 @@ export type ComposeFlowOptions = {
   canAttach?: boolean;
   /** True when this composer can tell an attachment finished uploading. */
   reportsMediaReady?: boolean;
+  /** This network refuses a post with no picture. */
+  mediaRequired?: boolean;
+  /** The caption field only appears after a file is chosen. */
+  mediaFirst?: boolean;
+  /** Screens between the upload and the caption. */
+  afterAttach?: Array<{ click: string; waitFor: string; label: string }>;
   /** Absolute epoch ms. The API server abandons the bridge call at 20s. */
   deadline: number;
   allowHotkey: boolean;
@@ -123,16 +159,31 @@ export async function runComposeFlow(
 ): Promise<PublishOutcome> {
   const { label, body, deadline, allowHotkey, hasOpener } = options;
   const media = options.media ?? [];
+  const mediaFirst = options.mediaFirst === true;
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
+
+  // 0. A network that cannot take a text-only post says so before anything is
+  //    opened. The UI refuses this too, but a draft can reach here having lost
+  //    its picture, and the composer would otherwise sit waiting for a caption
+  //    field that is never going to appear.
+  if (options.mediaRequired && media.length === 0) {
+    return {
+      kind: "rejected",
+      detail: `${label} does not take a post without an image or video. Attach one, approve it again, and it can go out from here.`,
+    };
+  }
 
   // 1. Wait for the composer, opening it once if this network hides it behind
   //    a button. A login screen instead is a different answer, not a failure:
   //    the draft stays approved and the operator signs in.
+  //
+  //    On an upload-first network there is no caption field yet, so what is
+  //    waited for is the upload control.
   let opened = false;
   let state: ProbeState = "waiting";
   while (now() < deadline) {
-    state = await page.probe();
+    state = mediaFirst ? await page.probeUpload() : await page.probe();
     if (state !== "waiting") break;
     if (hasOpener && !opened) {
       opened = await page.openComposer();
@@ -150,19 +201,26 @@ export async function runComposeFlow(
   if (state !== "composer") {
     return {
       kind: "rejected",
-      detail: `${label}'s composer did not load in time; nothing was submitted.`,
+      detail: mediaFirst
+        ? `${label}'s upload screen did not load in time; nothing was submitted.`
+        : `${label}'s composer did not load in time; nothing was submitted.`,
     };
   }
 
   // 2. Enter the text, and read it back. A composer that holds something other
   //    than the approved text must not be submitted — the approval was for
   //    those exact words.
-  const typed = await page.enterText(body);
-  if (!typed.ok) {
-    return {
-      kind: "rejected",
-      detail: `Could not enter the post text on ${label}. ${typed.detail ?? ""}`.trim(),
-    };
+  //
+  //    Upload-first networks do this after the picture is in, because until
+  //    then there is nowhere to type; the two orders are otherwise identical.
+  if (!mediaFirst) {
+    const typed = await page.enterText(body);
+    if (!typed.ok) {
+      return {
+        kind: "rejected",
+        detail: `Could not enter the post text on ${label}. ${typed.detail ?? ""}`.trim(),
+      };
+    }
   }
 
   // 2b. Attach the files, and wait for the network to finish taking them.
@@ -201,6 +259,61 @@ export async function runComposeFlow(
           detail: `${label} never finished taking the attachment, so nothing was submitted.`,
         };
       }
+    }
+  }
+
+  // 2c. Walk the screens between the upload and the caption.
+  //
+  //     Instagram puts crop and filter steps in the way; each is a button that
+  //     only exists once the previous screen has settled. A step that cannot be
+  //     completed names itself, because "the composer timed out" would send
+  //     someone hunting through the whole flow for a control that moved.
+  for (const step of options.afterAttach ?? []) {
+    let advanced = false;
+    while (now() < deadline && !advanced) {
+      advanced = await page.advance(step.click);
+      if (!advanced) await sleep(POLL_MS);
+    }
+    if (!advanced) {
+      return {
+        kind: "rejected",
+        detail: `${label} never offered its ${step.label} control, so nothing was submitted.`,
+      };
+    }
+
+    let arrived = false;
+    while (now() < deadline && !arrived) {
+      arrived = await page.present(step.waitFor);
+      if (!arrived) await sleep(POLL_MS);
+    }
+    if (!arrived) {
+      return {
+        kind: "rejected",
+        detail: `${label} did not move past its ${step.label} step, so nothing was submitted.`,
+      };
+    }
+  }
+
+  // 2d. Now the caption field exists, so the approved words can go in.
+  if (mediaFirst) {
+    let editorReady = false;
+    while (now() < deadline && !editorReady) {
+      editorReady = (await page.probe()) === "composer";
+      if (!editorReady) await sleep(POLL_MS);
+    }
+    if (!editorReady) {
+      return {
+        kind: "rejected",
+        detail: `${label} never showed a caption field, so nothing was submitted.`,
+      };
+    }
+
+    const typed = await page.enterText(body);
+    if (!typed.ok) {
+      return {
+        kind: "rejected",
+        detail: `Could not enter the post text on ${label}. ${typed.detail ?? ""}`.trim(),
+      };
     }
   }
 
@@ -285,6 +398,49 @@ export function composerPage(contents: WebContents, config: ComposerConfig): Com
           return "waiting";
         },
         config,
+      );
+    },
+
+    async probeUpload() {
+      return runInPage<ProbeState>(
+        contents,
+        (cfg: ComposerConfig) => {
+          if (cfg.fileInput && document.querySelector(cfg.fileInput)) return "composer";
+          if (cfg.login.selectors && document.querySelector(cfg.login.selectors)) return "login";
+          if (cfg.login.pathPattern && new RegExp(cfg.login.pathPattern).test(window.location.pathname)) {
+            return "login";
+          }
+          return "waiting";
+        },
+        config,
+      );
+    },
+
+    async advance(selector: string) {
+      return runInPage<boolean>(
+        contents,
+        (input: { selector: string }) => {
+          const controls = Array.from(
+            document.querySelectorAll(input.selector),
+          ) as HTMLElement[];
+          for (const control of controls) {
+            if (control.getAttribute("aria-disabled") === "true") continue;
+            if ((control as HTMLButtonElement).disabled) continue;
+            if (control.offsetParent === null) continue;
+            control.click();
+            return true;
+          }
+          return false;
+        },
+        { selector },
+      );
+    },
+
+    async present(selector: string) {
+      return runInPage<boolean>(
+        contents,
+        (input: { selector: string }) => !!document.querySelector(input.selector),
+        { selector },
       );
     },
 

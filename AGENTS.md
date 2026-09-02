@@ -5,7 +5,7 @@ touching anything. `README.md` is the pitch; `DEPLOY.md` is the operational
 manual; this file is what a contributor needs in order not to break the thing
 that makes the project worth having.
 
-Repo: `https://github.com/ethgr0wth/ua-social-browser` (branch `main`, GPLv3).
+Repo: `https://github.com/aiassistsecure/ua-social-browser` (branch `main`, GPLv3).
 
 ---
 
@@ -214,7 +214,7 @@ unfinished attempt means.
 
 | Networks | State |
 | --- | --- |
-| X | Bespoke adapter with its own selectors and submit flow; the reference implementation. |
+| X | Bespoke adapter with its own selectors and submit flow; the reference implementation. **Verified 2026-09-02:** the owner watched one real post land on a real account (`@interchained`) from the macOS shell — the review card flipped to posted and "View it on X" resolved to the live status. One post, one account, one OS; that is the whole of the evidence. |
 | LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr | Driven through `compose-driver.ts`. **Selectors written from product knowledge, never run against a real signed-in account.** |
 | Instagram, TikTok, YouTube, Pinterest | Refuse: a post needs image or video, a draft carries text. |
 | Reddit | Refuses: needs a community and a title the draft model does not carry. |
@@ -224,9 +224,11 @@ generic `501` any more, and adding a "temporary" one is a regression.
 
 Selector drift shows up as a loud failure, never as a phantom post — but **no
 adapter should be called working until someone has watched a real post land on
-a real account**, X included. Nothing in this repo can prove that, because the
-container it was written in has no display and no sessions. When you do verify
-one, update this table, `README.md`, and `DEPLOY.md § 5` in the same commit.
+a real account**. X has cleared that bar once (see the table); the other six
+have not. Nothing in this repo can prove it, because the container it was
+written in has no display and no sessions — verification happens on the
+owner's machine and is recorded here afterwards. When you do verify one, update
+this table, `README.md`, and `DEPLOY.md § 5` in the same commit.
 
 ---
 
@@ -306,6 +308,12 @@ the privileged origin gate, the approval gate (all refusal paths exercised
 live), scheduled dispatch, the append-only ledger and its integrity check, the
 idempotency ledger, the bridge contract, live sign-in end to end up to the point
 where a real browser session is needed, and the calendar → review-queue flow.
+
+**Verified on the owner's machine (2026-09-02):** the full approve → publish →
+confirm round-trip on X — a real post from the macOS shell, through the hidden
+composer window in the workspace's own session, confirmed by X and shown as
+posted with a working "View it on X" link. That is one post on one account;
+treat it as proof the path works, not as coverage of every X UI state.
 
 **Not verified, and must not be described as working:** the six shared-composer
 adapters against real accounts (§7). No display exists in the Replit container,

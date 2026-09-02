@@ -264,9 +264,11 @@ token and no headless impersonation anywhere in this path.
   image or video and a draft carries text; Reddit refuses because it needs a
   community and a title the draft model does not carry. A refusal names its
   reason and points at the workspace tab; the draft stays approved.
-  *Unverified:* the six shared-composer adapters have not been run against a
-  real signed-in account. Selector drift surfaces as a loud failure, never as a
-  phantom post, but each deserves one real post before it is trusted.
+  *Verified:* X, on 2026-09-02 — one real post from the macOS shell, confirmed
+  by X, shown as posted with a live link. *Unverified:* the six shared-composer
+  adapters have not been run against a real signed-in account. Selector drift
+  surfaces as a loud failure, never as a phantom post, but each deserves one
+  real post before it is trusted.
 - **Ambiguous outcomes never look like success.** If the post was submitted but
   no confirmation arrived within the deadline, the shell answers `409` and
   records the key as spent, so a retry replays that answer instead of risking a
@@ -431,8 +433,10 @@ it is marked external in `artifacts/api-server/build.mjs`. Bundling it produces
       that workspace's tab, a second click focuses the same tab rather than
       opening another, and the session badge flips only after the account is
       actually signed in
-- [ ] Approve → post round-trip verified against one real account per network —
-      required before any shared-composer adapter (LinkedIn, Facebook, Threads,
-      Bluesky, Mastodon, Tumblr) is described as working
+- [x] Approve → post round-trip verified against one real account on X
+      (2026-09-02, macOS shell)
+- [ ] Approve → post round-trip verified against one real account per remaining
+      network — required before any shared-composer adapter (LinkedIn, Facebook,
+      Threads, Bluesky, Mastodon, Tumblr) is described as working
 - [ ] Approval revocation verified: editing an approved draft clears the sign-off
 - [ ] `NEDB_DATA_DIR` backed up

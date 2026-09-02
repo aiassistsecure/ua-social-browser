@@ -242,7 +242,7 @@ export function Drafts({ state, updateState, workspace }: SectionProps) {
   return (
     <SectionShell
       title="Review queue"
-      description="The model drafts, you approve, and the post leaves from your own signed-in session on the network. Nothing here reaches an audience without an approval attached to it."
+      description="The model drafts, you approve, and the post leaves from your own signed-in session on the network — when you press Post, or at the time you set. Nothing here reaches an audience without an approval attached to it."
       actions={
         <div className="flex items-center gap-1 rounded-md border border-border p-1">
           {FILTERS.map((option) => (
@@ -458,9 +458,13 @@ export function Drafts({ state, updateState, workspace }: SectionProps) {
                       <Separator />
                       <p className="flex items-center gap-2 text-xs text-muted-foreground">
                         <CalendarClock className="h-3.5 w-3.5" />
-                        Queued for {formatDateTime(draft.scheduledFor)} — it
-                        leaves through this workspace's session, and only if the
-                        approval is still attached.
+                        Goes out on its own at{' '}
+                        {formatDateTime(draft.scheduledFor)}, through this
+                        workspace's session and under this approval. Edit the
+                        text and the approval drops, so it stays put. One
+                        attempt per time you set: if it fails, the reason lands
+                        here rather than a silent retry — set a new time to try
+                        again.
                       </p>
                     </>
                   ) : null}

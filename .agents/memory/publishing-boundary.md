@@ -18,7 +18,16 @@ the network is a lie about whether something reached an audience.
   success, never a queued-for-later pretence.
 - Editing an approved draft clears its approval. Approval is on the exact text.
 - The idempotency key derives from draft id + approval timestamp, so a retry
-  cannot double-post.
+  cannot double-post. Scheduled sends go through the same door as the Post
+  button — see [Scheduled dispatch](scheduled-dispatch.md).
+
+**Known gap, deliberately open:** approval is asserted by the browser document,
+and the API is unauthenticated with open CORS. Anyone who can reach the server
+can write a due, "approved" draft and the scheduler will send it. That was
+survivable when a person had to press Post; automatic dispatch makes the
+server-side approval boundary load-bearing. Closing it means server-authorized
+approval transitions plus authenticated state/publish endpoints — treat any
+work near this as security-critical rather than as plumbing.
 - Live network views render only in the shell. Social networks block framing, so
   the web surface shows an explicit "runs in the desktop shell" state instead of
   a mocked feed.

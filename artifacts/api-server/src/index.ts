@@ -1,5 +1,8 @@
 import app from "./app";
+import { resolveInterruptedDispatches } from "./lib/dispatch-log";
 import { logger } from "./lib/logger";
+import { startScheduler } from "./lib/scheduler";
+import { SINGLE_TENANT_ID, tenancyMode } from "./lib/tenant";
 
 const rawPort = process.env["PORT"];
 
@@ -27,4 +30,21 @@ app.listen(port, host, (err?: Error) => {
   }
 
   logger.info({ port, host }, "Server listening");
+
+  // Anything the last run handed to the session bridge without hearing back is
+  // settled as uncertain before the scheduler wakes up, so it is reported to a
+  // person rather than sent again on the chance it never went out.
+  if (tenancyMode() === "single") {
+    const interrupted = resolveInterruptedDispatches(SINGLE_TENANT_ID);
+    if (interrupted > 0) {
+      logger.warn(
+        { interrupted },
+        "Posts were in flight when this server last stopped; marked uncertain for review rather than resent",
+      );
+    }
+  }
+
+  // A scheduled time is a promise to post then, so something has to be awake
+  // to keep it.
+  startScheduler();
 });

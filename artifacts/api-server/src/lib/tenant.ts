@@ -1,4 +1,4 @@
-import type { Request } from "express";
+import type { Request, Response } from "express";
 
 /**
  * Tenancy seam.
@@ -41,6 +41,22 @@ export function resolveTenantId(req: Request): string {
   throw new TenantResolutionError(
     "Multi-tenant mode is enabled but no authenticated tenant is attached to the request",
   );
+}
+
+/** Resolves the tenant, or writes the 401 and returns null. */
+export function tenantOrUnauthorized(
+  req: Request,
+  res: Response,
+): string | null {
+  try {
+    return resolveTenantId(req);
+  } catch (error) {
+    if (error instanceof TenantResolutionError) {
+      res.status(error.status).json({ error: error.message });
+      return null;
+    }
+    throw error;
+  }
 }
 
 export function tenantLabel(tenantId: string): string {

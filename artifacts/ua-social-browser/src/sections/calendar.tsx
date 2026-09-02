@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, Timer } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PlatformGlyph } from '@/components/app/platform-glyph';
+import { useSchedulerStatus } from '@/hooks/use-scheduler';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { PLATFORM_LABEL, findWorkspace, formatDateTime } from '@/lib/workspace';
@@ -29,6 +30,7 @@ function isSameDay(a: Date, b: Date): boolean {
 export function Calendar({ state, workspace, onNavigate }: SectionProps) {
   const [month, setMonth] = useState(() => new Date());
   const [scope, setScope] = useState<'workspace' | 'all'>('workspace');
+  const scheduler = useSchedulerStatus();
 
   const scheduled = useMemo(
     () =>
@@ -71,7 +73,7 @@ export function Calendar({ state, workspace, onNavigate }: SectionProps) {
   return (
     <SectionShell
       title="Plan"
-      description="A shared view of what is queued and when. Scheduling is a commitment you make, not an automation that fires without you."
+      description="A shared view of what is queued and when. A time on an approved post is kept: it goes out then, through this workspace's own session, carrying the approval you signed it with."
       actions={
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 rounded-md border border-border p-1">
@@ -121,6 +123,25 @@ export function Calendar({ state, workspace, onNavigate }: SectionProps) {
         </div>
       }
     >
+      {scheduler ? (
+        <div
+          className={cn(
+            'flex items-start gap-2 rounded-md border p-3 text-xs',
+            scheduler.active && scheduler.bridgeConfigured
+              ? 'border-card-border text-muted-foreground'
+              : 'border-destructive/40 bg-destructive/10 text-destructive',
+          )}
+          data-testid="banner-scheduler"
+        >
+          {scheduler.active && scheduler.bridgeConfigured ? (
+            <Timer className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          )}
+          <span>{scheduler.detail}</span>
+        </div>
+      ) : null}
+
       <Card>
         <CardContent className="p-3">
           <div className="grid grid-cols-7 gap-1">

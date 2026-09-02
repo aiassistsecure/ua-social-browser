@@ -1,36 +1,16 @@
-import { randomUUID } from "node:crypto";
 import { Router, type IRouter } from "express";
 import { GetSessionStatusResponse, PublishPostBody } from "@workspace/api-zod";
-import { publishThroughSession, readSessionStatus } from "../lib/session-bridge";
 import { readBrowserState } from "../lib/browser-store";
-import { TenantResolutionError, resolveTenantId } from "../lib/tenant";
+import { releaseClaim, takeClaim } from "../lib/dispatch-claims";
+import {
+  dispatchApprovedPost,
+  idempotencyKeyFor,
+} from "../lib/publish-dispatch";
+import { readSessionStatus } from "../lib/session-bridge";
+import { asStoredDraft, type StoredDraft } from "../lib/stored-draft";
+import { tenantOrUnauthorized } from "../lib/tenant";
 
 const router: IRouter = Router();
-
-type StoredDraft = {
-  id: string;
-  workspaceId: string;
-  platform: string;
-  body: string;
-  status: string;
-  approvedBy: string | null;
-  approvedAt: string | null;
-};
-
-function asStoredDraft(value: unknown): StoredDraft | null {
-  if (!value || typeof value !== "object") return null;
-  const draft = value as Record<string, unknown>;
-  if (typeof draft.id !== "string") return null;
-  return {
-    id: draft.id,
-    workspaceId: typeof draft.workspaceId === "string" ? draft.workspaceId : "",
-    platform: typeof draft.platform === "string" ? draft.platform : "",
-    body: typeof draft.body === "string" ? draft.body : "",
-    status: typeof draft.status === "string" ? draft.status : "",
-    approvedBy: typeof draft.approvedBy === "string" ? draft.approvedBy : null,
-    approvedAt: typeof draft.approvedAt === "string" ? draft.approvedAt : null,
-  };
-}
 
 /** Statuses that mean a person has signed this draft off. */
 const APPROVED_STATUSES = new Set([
@@ -40,7 +20,11 @@ const APPROVED_STATUSES = new Set([
   "failed",
 ]);
 
-type ApprovalCheck = { ok: true; draft: StoredDraft } | { ok: false; detail: string };
+type ApprovedDraft = StoredDraft & { approvedBy: string; approvedAt: string };
+
+type ApprovalCheck =
+  | { ok: true; draft: ApprovedDraft }
+  | { ok: false; detail: string };
 
 /**
  * Checks the approval against the stored draft rather than the request.
@@ -51,6 +35,9 @@ type ApprovalCheck = { ok: true; draft: StoredDraft } | { ok: false; detail: str
  * that is what decides whether anything leaves. The submitted body must match
  * the approved text too — otherwise an approved draft id becomes a licence to
  * post anything.
+ *
+ * This is the same reading the scheduler does before an automatic send, so both
+ * paths are held to one approval rather than to two different ones.
  */
 function verifyApproval(
   tenantId: string,
@@ -64,10 +51,17 @@ function verifyApproval(
 ): ApprovalCheck {
   const state = readBrowserState(tenantId);
   if (!state) {
-    return { ok: false, detail: "No workspace state is stored yet, so nothing has been approved." };
+    return {
+      ok: false,
+      detail: "No workspace state is stored yet, so nothing has been approved.",
+    };
   }
 
-  const draft = state.drafts.map(asStoredDraft).find((entry) => entry?.id === input.draftId);
+  const draft: StoredDraft | null =
+    state.drafts
+      .map(asStoredDraft)
+      .find((entry): entry is StoredDraft => entry?.id === input.draftId) ??
+    null;
   if (!draft) {
     return {
       ok: false,
@@ -75,38 +69,50 @@ function verifyApproval(
     };
   }
 
-  if (!APPROVED_STATUSES.has(draft.status) || !draft.approvedBy?.trim() || !draft.approvedAt?.trim()) {
+  const approvedBy = draft.approvedBy?.trim();
+  const approvedAt = draft.approvedAt?.trim();
+  if (!APPROVED_STATUSES.has(draft.status) || !approvedBy || !approvedAt) {
     return {
       ok: false,
-      detail: "That draft has not been approved by a person. Approve it in the review queue first.",
+      detail:
+        "That draft has not been approved by a person. Approve it in the review queue first.",
     };
   }
 
   if (draft.workspaceId !== input.workspaceId) {
-    return { ok: false, detail: "That draft was approved for a different workspace." };
+    return {
+      ok: false,
+      detail: "That draft was approved for a different workspace.",
+    };
   }
 
   if (draft.platform !== input.platform) {
-    return { ok: false, detail: "That draft was approved for a different network." };
+    return {
+      ok: false,
+      detail: "That draft was approved for a different network.",
+    };
   }
 
   if (draft.body !== input.body) {
     return {
       ok: false,
-      detail: "The submitted text does not match the approved draft. Approve the edited version first.",
+      detail:
+        "The submitted text does not match the approved draft. Approve the edited version first.",
     };
   }
 
-  const assertedBy = input.approval.approvedBy.trim();
-  const assertedAt = input.approval.approvedAt.trim();
-  if (assertedBy !== draft.approvedBy.trim() || assertedAt !== draft.approvedAt.trim()) {
+  if (
+    input.approval.approvedBy.trim() !== approvedBy ||
+    input.approval.approvedAt.trim() !== approvedAt
+  ) {
     return {
       ok: false,
-      detail: "The approval in this request disagrees with the recorded sign-off.",
+      detail:
+        "The approval in this request disagrees with the recorded sign-off.",
     };
   }
 
-  return { ok: true, draft };
+  return { ok: true, draft: { ...draft, approvedBy, approvedAt } };
 }
 
 router.get("/session/status", async (req, res) => {
@@ -126,20 +132,12 @@ router.post("/publish", async (req, res) => {
   }
 
   const input = parsed.data;
+  const tenantId = tenantOrUnauthorized(req, res);
+  if (!tenantId) return;
 
   // The approval is the whole point of the product: a model may draft, but a
   // person signs. No approval, no network call. The sign-off is read from the
   // stored ledger, never from the request that wants to publish.
-  let tenantId: string;
-  try {
-    tenantId = resolveTenantId(req);
-  } catch (error) {
-    if (error instanceof TenantResolutionError) {
-      return res.status(error.status).json({ error: error.message });
-    }
-    throw error;
-  }
-
   const approval = verifyApproval(tenantId, input);
   if (!approval.ok) {
     req.log.warn(
@@ -149,55 +147,87 @@ router.post("/publish", async (req, res) => {
     return res.status(409).json({ error: approval.detail });
   }
 
-  const attemptedAt = new Date().toISOString();
-  const outcome = await publishThroughSession({
-    workspaceId: input.workspaceId,
-    draftId: input.draftId,
-    platform: input.platform,
-    body: input.body,
-    idempotencyKey: input.idempotencyKey ?? randomUUID(),
-  });
+  const stored = approval.draft;
+
+  // A post is identified by itself and the approval it carries, and by nothing
+  // a caller gets to choose. A client may send that key along, but a different
+  // one is refused rather than honoured: two invented keys for one post would
+  // each look new, and each would post.
+  const expectedKey = idempotencyKeyFor(stored.id, stored.approvedAt);
+  if (input.idempotencyKey && input.idempotencyKey !== expectedKey) {
+    return res.status(400).json({
+      error:
+        "The idempotency key of a post is its draft and the approval it carries; a different key cannot be supplied.",
+    });
+  }
+
+  // The same claim the scheduler takes, for the same reason: while this is on
+  // its way out, the stored copy is the truth and nothing may quietly rewrite
+  // the post underneath it.
+  const claim = takeClaim(tenantId, stored.id, stored.approvedAt);
+  if (!claim) {
+    return res
+      .status(409)
+      .json({ error: "This post is already on its way out." });
+  }
+
+  // Same door the scheduler uses: whichever of the two gets there first does
+  // the posting, and the other is handed that result rather than posting again.
+  const outcome = await dispatchApprovedPost({
+    tenantId,
+    workspaceId: stored.workspaceId,
+    draftId: stored.id,
+    platform: stored.platform,
+    body: stored.body,
+    approval: { approvedBy: stored.approvedBy, approvedAt: stored.approvedAt },
+    source: "operator",
+    // Pressing Post on a post that is also due is that instruction being
+    // carried out, so it is recorded against the send time and the scheduler
+    // does not come along afterwards and send it a second time.
+    ...(stored.scheduledFor ? { scheduledFor: stored.scheduledFor } : {}),
+  }).finally(() => releaseClaim(claim));
 
   const base = {
     draftId: input.draftId,
     platform: input.platform,
-    attemptedAt,
+    attemptedAt: outcome.attemptedAt,
   };
 
-  switch (outcome.kind) {
-    case "published":
-      req.log.info(
-        { workspaceId: input.workspaceId, draftId: input.draftId },
-        "Published through workspace session",
-      );
-      return res.json({
-        ...base,
-        status: "published" as const,
-        postUrl: outcome.postUrl,
-        postId: outcome.postId,
-        message: "Posted from your own signed-in session.",
-      });
+  if (outcome.status === "published") {
+    req.log.info(
+      {
+        workspaceId: input.workspaceId,
+        draftId: input.draftId,
+        replayed: outcome.replayed,
+      },
+      outcome.replayed
+        ? "Publish replayed an earlier dispatch of the same approval"
+        : "Published through workspace session",
+    );
+    return res.json({
+      ...base,
+      status: "published" as const,
+      postUrl: outcome.postUrl,
+      postId: outcome.postId,
+      message: outcome.message,
+    });
+  }
 
+  const failure = {
+    ...base,
+    status: "failed" as const,
+    message: outcome.message,
+  };
+
+  switch (outcome.reason) {
+    case "approval-missing":
+      return res.status(409).json({ error: outcome.message });
     case "unauthenticated":
-      return res.status(409).json({
-        ...base,
-        status: "failed" as const,
-        message: outcome.detail,
-      });
-
+      return res.status(409).json(failure);
     case "rejected":
-      return res.status(502).json({
-        ...base,
-        status: "failed" as const,
-        message: outcome.detail,
-      });
-
-    case "unavailable":
-      return res.status(503).json({
-        ...base,
-        status: "failed" as const,
-        message: outcome.detail,
-      });
+      return res.status(502).json(failure);
+    default:
+      return res.status(503).json(failure);
   }
 });
 

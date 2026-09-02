@@ -6,6 +6,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { BrowserChrome } from '@/components/app/browser-chrome';
 import { SideNav } from '@/components/app/side-nav';
 import { useBrowserState } from '@/hooks/use-browser-state';
+import { useScheduledDispatches } from '@/hooks/use-scheduler';
 import { Dashboard } from '@/sections/dashboard';
 import { Network } from '@/sections/network';
 import { Composer } from '@/sections/composer';
@@ -33,6 +34,10 @@ const queryClient = new QueryClient({
 function Workbench() {
   const { state, updateState, status, integrity } = useBrowserState();
   const [section, setSection] = useState<Section>('dashboard');
+
+  // Scheduled posts are dispatched by the API server, including while this
+  // page is closed. Pick up whatever happened, whichever section is open.
+  useScheduledDispatches(state, updateState);
 
   const workspace = activeWorkspace(state);
   const profile = profileForWorkspace(state, workspace);

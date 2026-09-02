@@ -1,14 +1,7 @@
-import path from "node:path";
-import { mkdirSync } from "node:fs";
-import { NedbCore } from "nedb-engine";
+import { db, getStoreHealth } from "./store";
 
-const dataDirectory =
-  process.env.NEDB_DATA_DIR ??
-  path.join(process.cwd(), ".data", "ua-social-browser");
+export { getStoreHealth };
 
-mkdirSync(dataDirectory, { recursive: true });
-
-const db = NedbCore.open(dataDirectory);
 const COLLECTION = "browser_state";
 
 /**
@@ -53,15 +46,6 @@ export function writeBrowserState(
   ) as BrowserStateDocument;
   db.flush();
   return stored;
-}
-
-export function getStoreHealth() {
-  return {
-    verified: db.verify(),
-    sequence: Number(db.seq()),
-    head: db.head(),
-    dataDirectory,
-  };
 }
 
 export function exportStoreHistory(tenantId: string) {

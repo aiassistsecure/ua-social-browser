@@ -1,4 +1,5 @@
 - [nedb-engine native binding](nedb-engine-native-binding.md) — must stay external in esbuild bundles or startup dies looking for a package that was never published.
 - [Publishing boundary](publishing-boundary.md) — posts only leave through the user's own session via the native shell; the web surface must fail loudly, never fake success.
 - [Desktop shell architecture](desktop-shell-architecture.md) — the shell is Electron, not a patched Chromium fork, and the invariants that keep publishing honest.
+- [Live in-shell sign-in](live-sign-in.md) — one tab per workspace, and an opened login tab is never evidence that an account is signed in.
 - [Scheduled dispatch](scheduled-dispatch.md) — sending on a clock: one writer for the state document, one attempt per instruction, intent on disk before the network call.

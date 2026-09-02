@@ -43,6 +43,28 @@ container. Set `AIASSIST_API_KEY` before you expect any AI feature to answer.
   origin — is covered by `pnpm --filter @workspace/ua-shell run test`, which does
   run here.
 
+### If the build cannot find a native binary
+
+```
+Error: Cannot find module @rollup/rollup-darwin-x64
+```
+
+Rollup, esbuild, lightningcss and Tailwind's oxide each ship one compiled binary
+per platform, pulled in as an optional dependency. The workspace template this
+repo grew out of excluded every non-linux-x64 one, because Replit only runs
+linux-x64 — which quietly made the repo unbuildable on the Mac and Windows
+machines that package the desktop shell. Those exclusions are gone; pnpm picks
+the binary for whatever host it is installing on.
+
+If you are on a checkout from before that change, the old lockfile is still in
+your tree and `node_modules` still reflects it:
+
+```bash
+git pull
+rm -rf node_modules */node_modules **/node_modules
+pnpm install
+```
+
 ## 2. Environment variables
 
 | Variable | Required | Default | Meaning |

@@ -64,6 +64,16 @@ export const publishPostBodyBodyMax = 12000;
 
 export const publishPostBodyApprovalApprovedByMax = 120;
 
+export const publishPostBodyMediaItemSha256RegExp = new RegExp('^[0-9a-f]{64}$');
+export const publishPostBodyMediaItemFilenameMax = 255;
+
+export const publishPostBodyMediaItemMimeTypeMax = 255;
+
+
+export const publishPostBodyMediaItemAltTextMax = 2000;
+
+export const publishPostBodyMediaMax = 10;
+
 
 
 export const PublishPostBody = zod.object({
@@ -75,6 +85,14 @@ export const PublishPostBody = zod.object({
   "approvedBy": zod.string().min(1).max(publishPostBodyApprovalApprovedByMax),
   "approvedAt": zod.string()
 }).describe('Human sign-off captured in the UI before anything is posted'),
+  "media": zod.array(zod.object({
+  "id": zod.string(),
+  "sha256": zod.string().regex(publishPostBodyMediaItemSha256RegExp),
+  "filename": zod.string().min(1).max(publishPostBodyMediaItemFilenameMax),
+  "mimeType": zod.string().min(1).max(publishPostBodyMediaItemMimeTypeMax),
+  "bytes": zod.number().min(1),
+  "altText": zod.string().max(publishPostBodyMediaItemAltTextMax).optional()
+}).describe('A reference to a stored upload. The bytes never travel in the browser state document or in a publish request; only this reference does, and the sha256 is what proves the file the shell uploads is the file the operator approved.')).max(publishPostBodyMediaMax).optional(),
   "idempotencyKey": zod.string().optional()
 })
 
@@ -87,6 +105,50 @@ export const PublishPostResponse = zod.object({
   "postId": zod.string().optional(),
   "message": zod.string().optional()
 })
+
+
+/**
+ * Accepts raw bytes and stores them content-addressed under the data directory, returning a reference. The bytes stay on disk: a draft, and later a publish request, carry only the reference, because the browser state document is rewritten whole on every edit and must not grow by the size of an image.
+ * @summary Store an image or video for attachment to a draft
+ */
+export const uploadMediaHeaderXFilenameMax = 255;
+
+
+
+export const UploadMediaHeader = zod.object({
+  "x-filename": zod.string().min(1).max(uploadMediaHeaderXFilenameMax).describe('Original filename, used as the upload\'s name on the network.')
+})
+
+export const uploadMediaResponseMediaSha256RegExp = new RegExp('^[0-9a-f]{64}$');
+export const uploadMediaResponseMediaFilenameMax = 255;
+
+export const uploadMediaResponseMediaMimeTypeMax = 255;
+
+
+export const uploadMediaResponseMediaAltTextMax = 2000;
+
+
+
+export const UploadMediaResponse = zod.object({
+  "media": zod.object({
+  "id": zod.string(),
+  "sha256": zod.string().regex(uploadMediaResponseMediaSha256RegExp),
+  "filename": zod.string().min(1).max(uploadMediaResponseMediaFilenameMax),
+  "mimeType": zod.string().min(1).max(uploadMediaResponseMediaMimeTypeMax),
+  "bytes": zod.number().min(1),
+  "altText": zod.string().max(uploadMediaResponseMediaAltTextMax).optional()
+}).describe('A reference to a stored upload. The bytes never travel in the browser state document or in a publish request; only this reference does, and the sha256 is what proves the file the shell uploads is the file the operator approved.')
+})
+
+
+/**
+ * @summary Read stored bytes back, for preview
+ */
+export const GetMediaParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetMediaResponse = zod.unknown()
 
 
 /**

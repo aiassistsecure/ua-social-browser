@@ -194,6 +194,29 @@ export const PublishRequestPlatform = {
   tumblr: 'tumblr',
 } as const;
 
+/**
+ * A reference to a stored upload. The bytes never travel in the browser state document or in a publish request; only this reference does, and the sha256 is what proves the file the shell uploads is the file the operator approved.
+ */
+export interface MediaRef {
+  id: string;
+  /** @pattern ^[0-9a-f]{64}$ */
+  sha256: string;
+  /**
+     * @minLength 1
+     * @maxLength 255
+     */
+  filename: string;
+  /**
+     * @minLength 1
+     * @maxLength 255
+     */
+  mimeType: string;
+  /** @minimum 1 */
+  bytes: number;
+  /** @maxLength 2000 */
+  altText?: string;
+}
+
 export interface PublishRequest {
   workspaceId: string;
   draftId: string;
@@ -204,7 +227,13 @@ export interface PublishRequest {
      */
   body: string;
   approval: Approval;
+  /** @maxItems 10 */
+  media?: MediaRef[];
   idempotencyKey?: string;
+}
+
+export interface UploadedMedia {
+  media: MediaRef;
 }
 
 export type PublishResultStatus = typeof PublishResultStatus[keyof typeof PublishResultStatus];

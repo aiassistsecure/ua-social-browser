@@ -22,6 +22,7 @@ import type { WebContents } from "electron";
 import type { PublishOutcome } from "../session-bridge-server";
 import { unconfirmedOutcome } from "../idempotency";
 import { runInPage } from "./page";
+import { setFileInput } from "./upload";
 
 export type ProbeState = "composer" | "login" | "waiting";
 
@@ -46,6 +47,20 @@ export type ComposerConfig = {
    * every one of them honours the keyboard shortcut.
    */
   submitHotkey?: boolean;
+  /**
+   * The network's `<input type="file">`. Usually hidden behind a styled
+   * button, so it is found structurally rather than by visibility.
+   *
+   * Absent means this composer has no upload control wired up yet, and a
+   * draft carrying an attachment is refused rather than posted without it.
+   */
+  fileInput?: string;
+  /**
+   * Present once an attachment has finished attaching — a thumbnail, a
+   * preview, a remove button. Submitting before this exists posts the text
+   * without the picture, which is a different post from the approved one.
+   */
+  mediaAttached?: string;
   login: { selectors?: string; pathPattern?: string };
   confirmation: {
     toast?: string;
@@ -70,6 +85,8 @@ export type ComposerPage = {
   probe(): Promise<ProbeState>;
   openComposer(): Promise<boolean>;
   enterText(text: string): Promise<{ ok: boolean; detail?: string }>;
+  attachMedia(paths: string[]): Promise<{ ok: boolean; detail?: string }>;
+  mediaReady(): Promise<boolean>;
   clickSubmit(): Promise<boolean>;
   pressSubmitHotkey(): Promise<void>;
   confirm(): Promise<ConfirmState>;
@@ -78,6 +95,12 @@ export type ComposerPage = {
 export type ComposeFlowOptions = {
   label: string;
   body: string;
+  /** Absolute paths, already checked against the approval by the caller. */
+  media?: string[];
+  /** True when this composer declares a file input. */
+  canAttach?: boolean;
+  /** True when this composer can tell an attachment finished uploading. */
+  reportsMediaReady?: boolean;
   /** Absolute epoch ms. The API server abandons the bridge call at 20s. */
   deadline: number;
   allowHotkey: boolean;
@@ -99,6 +122,7 @@ export async function runComposeFlow(
   options: ComposeFlowOptions,
 ): Promise<PublishOutcome> {
   const { label, body, deadline, allowHotkey, hasOpener } = options;
+  const media = options.media ?? [];
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
 
@@ -139,6 +163,45 @@ export async function runComposeFlow(
       kind: "rejected",
       detail: `Could not enter the post text on ${label}. ${typed.detail ?? ""}`.trim(),
     };
+  }
+
+  // 2b. Attach the files, and wait for the network to finish taking them.
+  //
+  //     An upload that is still in flight when the button is pressed posts the
+  //     words without the picture. That is not a smaller version of the
+  //     approved post; it is a different one, and on a network that requires
+  //     media it may not be a post at all.
+  if (media.length > 0) {
+    if (!options.canAttach) {
+      return {
+        kind: "rejected",
+        detail: `This build cannot attach files on ${label} yet, and the post carries ${
+          media.length === 1 ? "an attachment" : "attachments"
+        }. Nothing was posted; post it from the workspace tab instead.`,
+      };
+    }
+
+    const attached = await page.attachMedia(media);
+    if (!attached.ok) {
+      return {
+        kind: "rejected",
+        detail: `Could not attach the file on ${label}. ${attached.detail ?? ""}`.trim(),
+      };
+    }
+
+    if (options.reportsMediaReady) {
+      let ready = false;
+      while (now() < deadline && !ready) {
+        ready = await page.mediaReady();
+        if (!ready) await sleep(POLL_MS);
+      }
+      if (!ready) {
+        return {
+          kind: "rejected",
+          detail: `${label} never finished taking the attachment, so nothing was submitted.`,
+        };
+      }
+    }
   }
 
   // 3. Submit once.
@@ -287,6 +350,24 @@ export function composerPage(contents: WebContents, config: ComposerConfig): Com
           return { ok: true };
         },
         { cfg: config, text },
+      );
+    },
+
+    async attachMedia(paths: string[]) {
+      if (!config.fileInput) {
+        return { ok: false, detail: "No upload control is configured for this network." };
+      }
+      const result = await setFileInput(contents, config.fileInput, paths);
+      return result.ok ? { ok: true } : { ok: false, detail: result.detail };
+    },
+
+    async mediaReady() {
+      if (!config.mediaAttached) return true;
+      return runInPage<boolean>(
+        contents,
+        (cfg: ComposerConfig) =>
+          cfg.mediaAttached ? !!document.querySelector(cfg.mediaAttached) : true,
+        config,
       );
     },
 

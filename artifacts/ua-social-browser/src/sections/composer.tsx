@@ -246,6 +246,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           workspaceId: workspace.id,
           platform,
           body: candidate.text,
+          media: [],
           status: 'draft',
           scheduledFor: null,
           approvedBy: null,

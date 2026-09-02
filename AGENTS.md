@@ -65,6 +65,16 @@ told to someone about their own account.
    typing into the network's own page.
 10. **No mock data, no silent fallbacks.** Unknown state is reported as unknown
     (Bluesky and Mastodon genuinely cannot be judged from cookies, and say so).
+    A fresh install is empty, and nothing can be approved until the operator
+    has said who they are.
+11. **An approval covers the attachments, not just the words.** The publish
+    path compares the submitted media against the stored draft and refuses a
+    mismatch — a different picture, a dropped one, or edited alt text is a
+    different post. The shell re-hashes every file before uploading it, and a
+    post whose attachment cannot be attached fails rather than going out as
+    text. Media bytes never enter the state document: the browser state is
+    rewritten whole on every edit, so uploads live content-addressed under the
+    data directory and drafts carry references.
 
 If a change requires weakening one of these, that is a conversation with the
 owner, not a refactor.
@@ -104,6 +114,8 @@ scripts/               template leftover
 | `src/publisher/adapters.ts` | Per-network cookies, composer config, sign-in URL, refusal reasons |
 | `src/publisher/compose-driver.ts` | The shared composer flow and its honesty rules |
 | `src/idempotency.ts` | The spent-key ledger on disk |
+| `src/publisher/upload.ts` | CDP `DOM.setFileInputFiles`; the only way to fill a file input |
+| `src/publisher/approved-media.ts` | Path containment + re-hash before anything is uploaded |
 
 ### The API server
 
@@ -216,7 +228,7 @@ unfinished attempt means.
 | --- | --- |
 | X | Bespoke adapter with its own selectors and submit flow; the reference implementation. **Verified 2026-09-02:** the owner watched one real post land on a real account (`@interchained`) from the macOS shell — the review card flipped to posted and "View it on X" resolved to the live status. One post, one account, one OS; that is the whole of the evidence. |
 | LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr | Driven through `compose-driver.ts`. **Selectors written from product knowledge, never run against a real signed-in account.** |
-| Instagram, TikTok, YouTube, Pinterest | Refuse: a post needs image or video, a draft carries text. |
+| Instagram, TikTok, YouTube, Pinterest | Refuse: posting is a multi-step upload flow (choose, crop, filter, describe, share) that the shared driver cannot express, and there is no text-only route. Drafts *can* carry media now, so the old reason — "a draft carries text" — no longer applies; the flow is what is missing. |
 | Reddit | Refuses: needs a community and a title the draft model does not carry. |
 
 A refusal names its own reason and points at the workspace tab. There is no
@@ -371,6 +383,15 @@ signed under; the ledger is not rewritten.
 
 - Tell the operator when a scheduled post did not go out.
 - Stop the app and server drifting apart on scheduling data.
+
+**Media:** drafts carry images and video on the seven driven networks. Uploads
+are stored content-addressed by `artifacts/api-server/src/lib/media-store.ts`,
+handed to the shell as paths, and attached with CDP `DOM.setFileInputFiles`
+(the debugger is already attached for UA emulation, so it is reused). The four
+media-required networks and Reddit still refuse; unlocking them needs a
+step-machine the four-phase composer flow does not have, and Pinterest is the
+cheapest one to do first. **Not verified:** no file-input selector here has been
+run against a real signed-in account.
 
 **Not built:** signed installers per OS, per-tab UA switching (it is per
 workspace), a sign-in indicator on the shell's own tab strip, any real

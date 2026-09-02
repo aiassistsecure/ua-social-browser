@@ -260,9 +260,10 @@ token and no headless impersonation anywhere in this path.
   adapter; LinkedIn, Facebook, Threads, Bluesky, Mastodon and Tumblr run through
   the shared composer flow in `src/publisher/compose-driver.ts` (probe the page,
   open the composer, type, submit, wait for the network's confirmation).
-  Instagram, TikTok, YouTube and Pinterest refuse because a post there needs an
-  image or video and a draft carries text; Reddit refuses because it needs a
-  community and a title the draft model does not carry. A refusal names its
+  Instagram, TikTok, YouTube and Pinterest refuse because posting there is a
+  multi-step upload flow this build does not drive, with no text-only route;
+  Reddit refuses because it needs a community and a title the draft model does
+  not carry. A refusal names its
   reason and points at the workspace tab; the draft stays approved.
   *Verified:* X, on 2026-09-02 — one real post from the macOS shell, confirmed
   by X, shown as posted with a live link. *Unverified:* the six shared-composer
@@ -447,4 +448,7 @@ it is marked external in `artifacts/api-server/build.mjs`. Bundling it produces
       network — required before any shared-composer adapter (LinkedIn, Facebook,
       Threads, Bluesky, Mastodon, Tumblr) is described as working
 - [ ] Approval revocation verified: editing an approved draft clears the sign-off
-- [ ] `NEDB_DATA_DIR` backed up
+- [ ] `NEDB_DATA_DIR` backed up — this now holds `media/`, the uploaded files
+      themselves, as well as the ledger
+- [ ] Media round-trip checked on at least one driven network: attach, approve,
+      post, and confirm the picture is on the post rather than the text alone

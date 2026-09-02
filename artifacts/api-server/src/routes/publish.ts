@@ -11,6 +11,7 @@ import {
   dispatchApprovedPost,
   idempotencyKeyFor,
 } from "../lib/publish-dispatch";
+import { mediaFingerprint, type MediaRef } from "../lib/media-store";
 import { beginSignIn, readSessionStatus } from "../lib/session-bridge";
 import { asStoredDraft, type StoredDraft } from "../lib/stored-draft";
 import { tenantOrUnauthorized } from "../lib/tenant";
@@ -51,6 +52,7 @@ function verifyApproval(
     draftId: string;
     platform: string;
     body: string;
+    media?: MediaRef[];
     approval: { approvedBy: string; approvedAt: string };
   },
 ): ApprovalCheck {
@@ -103,6 +105,18 @@ function verifyApproval(
       ok: false,
       detail:
         "The submitted text does not match the approved draft. Approve the edited version first.",
+    };
+  }
+
+  // An approval covers the pictures as much as the words. Without this an
+  // approved draft id would be a licence to post any image, which is the same
+  // hole the body check above exists to close — and alt text is published
+  // content too, so a changed description is a changed post.
+  if (mediaFingerprint(draft.media) !== mediaFingerprint(input.media)) {
+    return {
+      ok: false,
+      detail:
+        "The submitted attachments do not match the approved draft. Approve the edited version first.",
     };
   }
 
@@ -220,6 +234,8 @@ router.post("/publish", async (req, res) => {
     draftId: stored.id,
     platform: stored.platform,
     body: stored.body,
+    // The stored copy, like the text: what was approved is what is sent.
+    media: stored.media,
     approval: { approvedBy: stored.approvedBy, approvedAt: stored.approvedAt },
     source: "operator",
     // Pressing Post on a post that is also due is that instruction being

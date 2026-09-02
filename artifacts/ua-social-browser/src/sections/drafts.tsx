@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BadgeCheck,
   CalendarClock,
   ExternalLink,
+  ImagePlus,
   Loader2,
   RotateCcw,
   Send,
   Trash2,
+  X as XIcon,
 } from 'lucide-react';
 import { usePublishPost } from '@workspace/api-client-react';
 import type { PublishRequestPlatform } from '@workspace/api-client-react';
@@ -32,6 +34,14 @@ import {
 import { PlatformGlyph } from '@/components/app/platform-glyph';
 import { useToast } from '@/hooks/use-toast';
 import { approverName, recordedApproval } from '@/lib/approver';
+import {
+  MEDIA_ACCEPT_ATTRIBUTE,
+  formatBytes,
+  mediaFingerprint,
+  mediaUrl,
+  refuseAttachment,
+  uploadMedia,
+} from '@/lib/media';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { platformProfile } from '@/lib/platforms';
@@ -43,7 +53,7 @@ import {
   relativeTime,
   toLocalInputValue,
 } from '@/lib/workspace';
-import type { Draft, DraftStatus } from '@/types';
+import type { Draft, DraftMedia, DraftStatus } from '@/types';
 
 type Filter = 'all' | 'pending' | 'approved' | 'published';
 
@@ -114,6 +124,8 @@ export function Drafts({
   const [filter, setFilter] = useState<Filter>('all');
   const [pendingPublish, setPendingPublish] = useState<Draft | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const fileInputPrefix = useId();
   const publishPost = usePublishPost();
 
   // Whoever is named here is who the ledger says signed. There is no fallback
@@ -195,6 +207,70 @@ export function Drafts({
       approvedAt: null,
       scheduledFor: null,
     });
+  }
+
+  /**
+   * Attaching or removing a picture is editing the post.
+   *
+   * The sign-off is on the exact content, and content includes what is being
+   * shown — the API server checks the attachments against the approval before
+   * it sends, so a change here that kept its approval would simply be refused
+   * later, with the operator wondering why.
+   */
+  function setMedia(draft: Draft, media: DraftMedia[]) {
+    const changed = mediaFingerprint(draft.media) !== mediaFingerprint(media);
+    const approved = Boolean(draft.approvedAt);
+    patchDraft(draft.id, {
+      media,
+      ...(changed && approved && draft.status !== 'published'
+        ? { status: 'draft' as const, approvedBy: null, approvedAt: null }
+        : {}),
+    });
+  }
+
+  async function attachFiles(draft: Draft, files: FileList | null) {
+    if (!files || files.length === 0) return;
+
+    setUploadingId(draft.id);
+    // Read from the draft as it was, then apply once: each upload awaits, and
+    // reading `draft.media` again between them would drop everything attached
+    // since this handler started.
+    const attached: DraftMedia[] = [...draft.media];
+
+    try {
+      for (const file of Array.from(files)) {
+        const refusal = refuseAttachment({
+          platform: draft.platform,
+          existing: attached,
+          file,
+        });
+        if (refusal) {
+          toast({
+            title: 'Not attached',
+            description: refusal.reason,
+            variant: 'destructive',
+          });
+          continue;
+        }
+
+        try {
+          attached.push(await uploadMedia(file));
+        } catch (error) {
+          toast({
+            title: 'Not attached',
+            description:
+              error instanceof Error ? error.message : `${file.name} could not be stored.`,
+            variant: 'destructive',
+          });
+        }
+      }
+
+      if (mediaFingerprint(attached) !== mediaFingerprint(draft.media)) {
+        setMedia(draft, attached);
+      }
+    } finally {
+      setUploadingId(null);
+    }
   }
 
   function removeDraft(draft: Draft) {
@@ -283,6 +359,9 @@ export function Drafts({
           draftId: draft.id,
           platform: draft.platform as PublishRequestPlatform,
           body: draft.body,
+          // Sent as recorded. The server compares this against the approved
+          // draft and refuses a mismatch, the same way it does for the text.
+          media: draft.media,
           approval,
           // No idempotency key: the server derives it from the stored draft and
           // its approval, and refuses a different one. Sending our own could
@@ -455,6 +534,121 @@ export function Drafts({
                     className="min-h-[110px] resize-y"
                     data-testid={`input-body-${draft.id}`}
                   />
+
+                  <div className="space-y-2">
+                    {draft.media.length > 0 ? (
+                      <div className="flex flex-wrap gap-3">
+                        {draft.media.map((item) => (
+                          <div
+                            key={item.id}
+                            className="w-44 space-y-1.5 rounded-md border border-border p-2"
+                            data-testid={`media-${draft.id}-${item.sha256.slice(0, 8)}`}
+                          >
+                            <div className="relative">
+                              {item.mimeType.startsWith('video/') ? (
+                                <video
+                                  src={mediaUrl(item)}
+                                  className="h-24 w-full rounded object-cover"
+                                  muted
+                                />
+                              ) : (
+                                <img
+                                  src={mediaUrl(item)}
+                                  alt={item.altText || item.filename}
+                                  className="h-24 w-full rounded object-cover"
+                                />
+                              )}
+                              {!locked ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMedia(
+                                      draft,
+                                      draft.media.filter((other) => other.id !== item.id),
+                                    )
+                                  }
+                                  className="absolute right-1 top-1 rounded-full bg-background/90 p-1 hover-elevate"
+                                  aria-label={`Remove ${item.filename}`}
+                                  data-testid={`button-remove-media-${draft.id}-${item.sha256.slice(0, 8)}`}
+                                >
+                                  <XIcon className="h-3 w-3" />
+                                </button>
+                              ) : null}
+                            </div>
+                            <p className="truncate text-[11px] text-muted-foreground" title={item.filename}>
+                              {item.filename} · {formatBytes(item.bytes)}
+                            </p>
+                            {network.supportsAltText ? (
+                              <Input
+                                value={item.altText ?? ''}
+                                readOnly={locked}
+                                placeholder="Describe it"
+                                onChange={(event) =>
+                                  setMedia(
+                                    draft,
+                                    draft.media.map((other) =>
+                                      other.id === item.id
+                                        ? { ...other, altText: event.target.value }
+                                        : other,
+                                    ),
+                                  )
+                                }
+                                className="h-7 text-xs"
+                                aria-label={`Alt text for ${item.filename}`}
+                                data-testid={`input-alt-${draft.id}-${item.sha256.slice(0, 8)}`}
+                              />
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {!locked ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          id={`${fileInputPrefix}-${draft.id}`}
+                          type="file"
+                          multiple
+                          accept={MEDIA_ACCEPT_ATTRIBUTE}
+                          className="hidden"
+                          onChange={(event) => {
+                            void attachFiles(draft, event.target.files);
+                            // Cleared so re-picking the same file still fires.
+                            event.target.value = '';
+                          }}
+                          data-testid={`input-media-${draft.id}`}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          asChild
+                          disabled={uploadingId === draft.id}
+                        >
+                          <label
+                            htmlFor={`${fileInputPrefix}-${draft.id}`}
+                            className="cursor-pointer"
+                            data-testid={`button-attach-${draft.id}`}
+                          >
+                            {uploadingId === draft.id ? (
+                              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <ImagePlus className="mr-2 h-3.5 w-3.5" />
+                            )}
+                            {uploadingId === draft.id ? 'Storing' : 'Attach'}
+                          </label>
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          {draft.media.length}/{network.mediaLimit}
+                          {network.requiresMedia && draft.media.length === 0
+                            ? ` · ${network.label} needs one`
+                            : ''}
+                          {approved && draft.media.length > 0
+                            ? ' · changing these clears the approval'
+                            : ''}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
 
                   {draft.status === 'failed' && draft.lastError ? (
                     <div

@@ -25,6 +25,7 @@ import { unconfirmedOutcome } from "../idempotency";
 import type { WorkspaceDirectory, WorkspaceEntry } from "../workspace-directory";
 import { applyEmulation, contextFor, detachEmulation, identityFrom } from "../workspace-contexts";
 import { adapterFor, type PlatformAdapter } from "./adapters";
+import { resolveApprovedMedia } from "./approved-media";
 import { resolveIdentity } from "./identity";
 import { runInPage } from "./page";
 import { createLogger, errorFields } from "../logger";
@@ -79,8 +80,13 @@ export function createPublisher(deps: {
   directory: WorkspaceDirectory;
   ledger: IdempotencyLedger;
   tabs: WorkspaceTabs;
+  /**
+   * The data directory this shell chose and handed to the API server. Uploads
+   * live under it, and a path outside it is refused rather than read.
+   */
+  dataDir: string;
 }): PublisherPort {
-  const { directory, ledger, tabs } = deps;
+  const { directory, ledger, tabs, dataDir } = deps;
 
   async function signedIn(
     entry: WorkspaceEntry,
@@ -233,6 +239,13 @@ export function createPublisher(deps: {
     entry: WorkspaceEntry,
     adapter: PlatformAdapter,
   ): Promise<PublishOutcome> {
+    // Checked before a window is opened, because a failure here means nothing
+    // was posted and should cost nothing.
+    const media = resolveApprovedMedia({ dataDir, media: input.media });
+    if (!media.ok) {
+      return { kind: "rejected", detail: media.detail, status: 409 };
+    }
+
     const identity = identityForEntry(entry);
     const context = contextFor(identity);
 
@@ -258,7 +271,12 @@ export function createPublisher(deps: {
     try {
       await applyEmulation(window.webContents, identity);
       await window.loadURL(adapter.composeUrl);
-      return await adapter.submit({ contents: window.webContents, body: input.body, deadline });
+      return await adapter.submit({
+        contents: window.webContents,
+        body: input.body,
+        media: media.paths,
+        deadline,
+      });
     } catch (error) {
       log.error("Publish attempt threw", {
         workspaceId: input.workspaceId,

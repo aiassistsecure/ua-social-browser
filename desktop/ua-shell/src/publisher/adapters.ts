@@ -27,10 +27,7 @@
 
 import type { WebContents } from "electron";
 import type { PublishOutcome } from "../session-bridge-server";
-import { runInPage } from "./page";
 import type { IdentityConfig } from "./identity";
-import { setFileInput } from "./upload";
-import { unconfirmedOutcome } from "../idempotency";
 import { composerPage, runComposeFlow, type ComposerConfig } from "./compose-driver";
 
 export type SessionDetection =
@@ -111,198 +108,6 @@ function driven(label: string, config: ComposerConfig) {
     });
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * X's composer. Selectors are its stable `data-testid` hooks, kept together so
- * they can be repaired in one place when X moves them.
- */
-const X_SELECTORS = {
-  editor: '[data-testid="tweetTextarea_0"]',
-  submit: '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]',
-  toast: '[data-testid="toast"]',
-  loginField: 'input[autocomplete="username"], [data-testid="loginButton"]',
-  fileInput: '[data-testid="fileInput"], input[type="file"][accept*="image"]',
-  /** The attachment's own remove button: present only once it has landed. */
-  attached: '[data-testid="attachments"] [data-testid="removeMedia"], [data-testid="attachments"] img',
-};
-
-type ProbeResult = "composer" | "login" | "waiting";
-
-async function xSubmit(context: SubmitContext): Promise<PublishOutcome> {
-  const { contents, body, deadline } = context;
-
-  // 1. Wait for the composer, or for X to demand a login instead.
-  let state: ProbeResult = "waiting";
-  while (Date.now() < deadline) {
-    state = await runInPage<ProbeResult>(
-      contents,
-      (selectors: typeof X_SELECTORS) => {
-        if (document.querySelector(selectors.editor)) return "composer";
-        if (document.querySelector(selectors.loginField)) return "login";
-        if (/\/(i\/flow\/login|login)/.test(window.location.pathname)) return "login";
-        return "waiting";
-      },
-      X_SELECTORS,
-    );
-    if (state !== "waiting") break;
-    await sleep(250);
-  }
-
-  if (state === "login") {
-    return {
-      kind: "unauthenticated",
-      detail: "X asked this workspace to sign in. Open the workspace tab and log in, then retry.",
-    };
-  }
-
-  if (state !== "composer") {
-    return {
-      kind: "rejected",
-      detail: "X's composer did not load in time; nothing was submitted.",
-    };
-  }
-
-  // 2. Type the post. `insertText` goes through the same input path a keypress
-  //    does, which is what X's editor listens to.
-  const typed = await runInPage<{ ok: boolean; detail?: string }>(
-    contents,
-    (input: { selectors: typeof X_SELECTORS; text: string }) => {
-      const editor = document.querySelector(input.selectors.editor) as HTMLElement | null;
-      if (!editor) return { ok: false, detail: "The composer disappeared before the text was entered." };
-      editor.focus();
-      document.execCommand("selectAll", false);
-      document.execCommand("insertText", false, input.text);
-      const written = (editor.textContent ?? "").replace(/\u200b/g, "").trim();
-      const expected = input.text.trim();
-      if (written !== expected) {
-        return {
-          ok: false,
-          detail: `The composer holds ${written.length} characters but the post is ${expected.length}.`,
-        };
-      }
-      return { ok: true };
-    },
-    { selectors: X_SELECTORS, text: body },
-  );
-
-  if (!typed.ok) {
-    return {
-      kind: "rejected",
-      detail: `Could not enter the post text on X. ${typed.detail ?? ""}`.trim(),
-    };
-  }
-
-  // 2b. Attach the files and wait for X to finish taking them. X keeps its
-  //     post button live while an upload is still going, so pressing it early
-  //     posts the words on their own.
-  if (context.media.length > 0) {
-    const attached = await setFileInput(contents, X_SELECTORS.fileInput, context.media);
-    if (!attached.ok) {
-      return {
-        kind: "rejected",
-        detail: `Could not attach the file on X. ${attached.detail}`,
-      };
-    }
-
-    let ready = false;
-    while (Date.now() < deadline && !ready) {
-      ready = await runInPage<boolean>(
-        contents,
-        (selectors: typeof X_SELECTORS) => !!document.querySelector(selectors.attached),
-        X_SELECTORS,
-      );
-      if (!ready) await sleep(250);
-    }
-    if (!ready) {
-      return {
-        kind: "rejected",
-        detail: "X never finished taking the attachment, so nothing was submitted.",
-      };
-    }
-  }
-
-  // 3. Submit once the button is live.
-  let clicked = false;
-  while (Date.now() < deadline && !clicked) {
-    clicked = await runInPage<boolean>(
-      contents,
-      (selectors: typeof X_SELECTORS) => {
-        const button = document.querySelector(selectors.submit) as HTMLElement | null;
-        if (!button) return false;
-        if (button.getAttribute("aria-disabled") === "true") return false;
-        button.click();
-        return true;
-      },
-      X_SELECTORS,
-    );
-    if (!clicked) await sleep(200);
-  }
-
-  if (!clicked) {
-    return {
-      kind: "rejected",
-      detail: "X never enabled its post button; the draft was not submitted.",
-    };
-  }
-
-  // 4. Confirm. An emptied composer plus X's own toast is the signal; an error
-  //    toast is a rejection. Anything else stays unconfirmed on purpose.
-  while (Date.now() < deadline) {
-    const confirmation = await runInPage<{
-      state: "sent" | "error" | "waiting";
-      detail?: string;
-      postUrl?: string;
-    }>(
-      contents,
-      (selectors: typeof X_SELECTORS) => {
-        const toast = document.querySelector(selectors.toast) as HTMLElement | null;
-        const toastText = (toast?.textContent ?? "").trim();
-        const link = toast?.querySelector('a[href*="/status/"]') as HTMLAnchorElement | null;
-
-        if (toastText && /(went wrong|could not|failed|error|try again)/i.test(toastText)) {
-          return { state: "error" as const, detail: toastText };
-        }
-        if (link) {
-          return { state: "sent" as const, postUrl: link.href, detail: toastText };
-        }
-        if (toastText && /(sent|posted)/i.test(toastText)) {
-          return { state: "sent" as const, detail: toastText };
-        }
-
-        const editor = document.querySelector(selectors.editor);
-        const emptied = !editor || (editor.textContent ?? "").trim() === "";
-        const leftComposer = !/\/compose\//.test(window.location.pathname);
-        if (emptied && leftComposer) return { state: "sent" as const };
-
-        return { state: "waiting" as const };
-      },
-      X_SELECTORS,
-    );
-
-    if (confirmation.state === "error") {
-      return { kind: "rejected", detail: `X rejected the post: ${confirmation.detail}` };
-    }
-
-    if (confirmation.state === "sent") {
-      const postId = confirmation.postUrl?.match(/\/status\/(\d+)/)?.[1];
-      return {
-        kind: "published",
-        postUrl: confirmation.postUrl,
-        postId,
-        detail: confirmation.detail ?? "X accepted the post.",
-      };
-    }
-
-    await sleep(250);
-  }
-
-  return unconfirmedOutcome(
-    "The post was submitted to X but no confirmation arrived before the deadline. " +
-      "Check the account: this attempt will not be retried automatically, because a retry could double-post.",
-  );
-}
-
 /**
  * Composer configs, one per driven network.
  *
@@ -312,6 +117,50 @@ async function xSubmit(context: SubmitContext): Promise<PublishOutcome> {
  * resilience for no complexity.
  */
 const COMPOSERS: Record<string, ComposerConfig> = {
+  /**
+   * X, on the shared flow.
+   *
+   * X used to have its own `xSubmit`, written before `compose-driver.ts` grew
+   * the honesty rules the other networks now get for free. The cost of that
+   * fork was measurable rather than theoretical: the shared driver learned to
+   * treat "the composer vanished because the page bounced to a login" as an
+   * unknown outcome, and X — never having been migrated — went on reporting it
+   * as a successful post. Its own success test was "the editor is gone and we
+   * are no longer on /compose/", and a login page satisfies both.
+   *
+   * Every signal below is the one `xSubmit` used, expressed in the schema, so
+   * behaviour on the paths that already worked is unchanged. Two details are
+   * load-bearing and easy to get wrong:
+   *
+   *  - `postLink` is scoped INSIDE the toast. `xSubmit` read the status link as
+   *    `toast.querySelector(...)`; the driver's lookup is document-wide, and an
+   *    unscoped `a[href*="/status/"]` would match any post in the timeline
+   *    behind the composer — every attempt would "succeed" instantly.
+   *  - `login.pathPattern` is deliberately unanchored, matching the original
+   *    `/\/(i\/flow\/login|login)/` test against the pathname rather than
+   *    anchoring it to the start.
+   */
+  x: {
+    editor: '[data-testid="tweetTextarea_0"]',
+    editorKind: "contenteditable",
+    submit: '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]',
+    fileInput: '[data-testid="fileInput"], input[type="file"][accept*="image"]',
+    // Present only once the attachment has actually landed.
+    mediaAttached:
+      '[data-testid="attachments"] [data-testid="removeMedia"], [data-testid="attachments"] img',
+    login: {
+      selectors: 'input[autocomplete="username"], [data-testid="loginButton"]',
+      pathPattern: "/(i/flow/login|login)",
+    },
+    confirmation: {
+      toast: '[data-testid="toast"]',
+      postLink: '[data-testid="toast"] a[href*="/status/"]',
+      postUrlPattern: "/status/(\\d+)",
+      successText: "sent|posted",
+      errorText: "went wrong|could not|failed|error|try again",
+      stillComposingPath: "/compose/",
+    },
+  },
   linkedin: {
     // `shareActive` opens the share box straight away rather than making the
     // driver hunt for the "Start a post" button on the feed.
@@ -504,7 +353,7 @@ const ADAPTERS: PlatformAdapter[] = [
         ],
       },
     },
-    submit: xSubmit,
+    submit: driven("X", COMPOSERS.x!),
   },
   {
     platform: "instagram",
@@ -658,6 +507,18 @@ const ADAPTERS: PlatformAdapter[] = [
 
 export function adapterFor(platform: string): PlatformAdapter | null {
   return ADAPTERS.find((adapter) => adapter.platform === platform) ?? null;
+}
+
+/**
+ * The composer config a driven network uses, for tests and diagnostics.
+ *
+ * Exported so the config can be asserted without a display or a session: the
+ * selectors stay unverifiable, but what the config *claims* — which toast text
+ * means sent, where the post link is scoped, which paths are a login — is
+ * checkable, and X is the one adapter whose behaviour must not drift.
+ */
+export function composerConfigFor(platform: string): ComposerConfig | null {
+  return COMPOSERS[platform] ?? null;
 }
 
 export function knownPlatforms(): string[] {

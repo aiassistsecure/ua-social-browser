@@ -226,7 +226,7 @@ unfinished attempt means.
 
 | Networks | State |
 | --- | --- |
-| X | Bespoke adapter with its own selectors and submit flow; the reference implementation. **Verified 2026-09-02:** the owner watched one real post land on a real account (`@interchained`) from the macOS shell — the review card flipped to posted and "View it on X" resolved to the live status. One post, one account, one OS; that is the whole of the evidence. |
+| X | Driven through `compose-driver.ts` like the rest, since its own `xSubmit` fell behind the shared flow's honesty rules — see below. **Verified 2026-09-02:** the owner watched one real post land on a real account (`@interchained`) from the macOS shell — the review card flipped to posted and "View it on X" resolved to the live status. One post, one account, one OS; that is the whole of the evidence. |
 | LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr | Driven through `compose-driver.ts`. **Selectors written from product knowledge, never run against a real signed-in account.** |
 | Instagram, Pinterest | Driven, upload-first: the flow waits for the upload control, attaches, walks any screens in between, and only then types the caption — there is no caption field until an image is in. Both refuse a post with no attachment. Instagram walks crop and filter via `afterAttach`; Pinterest is single-screen. **Selectors unverified, same as the six above.** Pinterest does not model board selection — see `adapters.ts`. |
 | TikTok, YouTube | Refuse: a post needs a *video*, and this build drives image composers rather than an encode-and-wizard upload flow. |
@@ -234,6 +234,22 @@ unfinished attempt means.
 
 A refusal names its own reason and points at the workspace tab. There is no
 generic `501` any more, and adding a "temporary" one is a regression.
+
+**There are no bespoke adapters left, and that is a rule now, not a tidiness
+preference.** X had its own `xSubmit`, written before `compose-driver.ts` grew
+the rule that a page bouncing to a login says nothing about whether a post went
+out. The shared flow returns `login` there and reports the attempt as
+unconfirmed; `xSubmit` tested success as "the editor is gone and we are no
+longer on `/compose/`", which a login page satisfies — so it reported a
+**phantom post**, on the one adapter anyone had actually verified. A fork does
+not just duplicate code; it stops receiving the fixes. Add a network by adding
+a `COMPOSERS` entry, never a second submit path.
+
+Two details in `COMPOSERS.x` are load-bearing and were the risk in that
+migration: `postLink` must stay scoped inside the toast (the driver's lookup is
+document-wide, and an unscoped `a[href*="/status/"]` matches any post in the
+timeline behind the composer, so every attempt would "succeed" instantly), and
+`login.pathPattern` is deliberately unanchored to match the original test.
 
 Selector drift shows up as a loud failure, never as a phantom post — but **no
 adapter should be called working until someone has watched a real post land on

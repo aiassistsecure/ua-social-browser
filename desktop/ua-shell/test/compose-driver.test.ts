@@ -31,6 +31,9 @@ function assertUnconfirmed(outcome: PublishOutcome) {
 
 type Script = {
   probe?: ProbeState[];
+  probeUpload?: ProbeState[];
+  advance?: boolean[];
+  present?: boolean[];
   enterText?: { ok: boolean; detail?: string };
   attachMedia?: { ok: boolean; detail?: string };
   mediaReady?: boolean[];
@@ -55,6 +58,18 @@ function fakePage(script: Script) {
     async probe() {
       calls.push("probe");
       return next(script.probe, "waiting");
+    },
+    async probeUpload() {
+      calls.push("probeUpload");
+      return next(script.probeUpload, "composer");
+    },
+    async advance(selector: string) {
+      calls.push(`advance:${selector}`);
+      return next(script.advance, true);
+    },
+    async present(selector: string) {
+      calls.push(`present:${selector}`);
+      return next(script.present, true);
     },
     async openComposer() {
       calls.push("openComposer");
@@ -108,6 +123,9 @@ function run(
     media: string[];
     canAttach: boolean;
     reportsMediaReady: boolean;
+    mediaRequired: boolean;
+    mediaFirst: boolean;
+    afterAttach: Array<{ click: string; waitFor: string; label: string }>;
   }> = {},
 ) {
   const { page, calls } = fakePage(script);
@@ -118,6 +136,9 @@ function run(
     media: over.media ?? [],
     canAttach: over.canAttach ?? true,
     reportsMediaReady: over.reportsMediaReady ?? true,
+    mediaRequired: over.mediaRequired ?? false,
+    mediaFirst: over.mediaFirst ?? false,
+    ...(over.afterAttach ? { afterAttach: over.afterAttach } : {}),
     deadline: time.deadline,
     allowHotkey: over.allowHotkey ?? false,
     hasOpener: over.hasOpener ?? false,
@@ -320,5 +341,129 @@ describe("the shared composer flow", () => {
       !calls.some((call) => call.startsWith("attachMedia") || call === "mediaReady"),
       "adding attachments must not change how a plain post behaves",
     );
+  });
+
+  test("a network that needs a picture refuses a post with none", async () => {
+    const { outcome, calls } = await run(
+      { probe: ["composer"], clickSubmit: [true], confirm: [{ state: "sent" }] },
+      { mediaRequired: true, media: [] },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.match(outcome.detail, /without an image or video/);
+    assert.equal(calls.length, 0, "nothing should even be opened");
+  });
+
+  test("an upload-first network waits for the upload control, not a caption box", async () => {
+    const { outcome, calls } = await run(
+      {
+        probeUpload: ["composer"],
+        probe: ["composer"],
+        clickSubmit: [true],
+        confirm: [{ state: "sent" }],
+      },
+      { mediaFirst: true, mediaRequired: true, media: ["/data/media/abc/photo.jpg"] },
+    );
+
+    assert.equal(outcome.kind, "published");
+    assert.ok(calls.includes("probeUpload"), "the upload control is what gates the start");
+    const firstProbeUpload = calls.indexOf("probeUpload");
+    const attached = calls.indexOf("attachMedia:/data/media/abc/photo.jpg");
+    assert.ok(firstProbeUpload < attached);
+  });
+
+  test("an upload-first network types the caption only after the picture is in", async () => {
+    const { outcome, calls } = await run(
+      {
+        probeUpload: ["composer"],
+        probe: ["composer"],
+        clickSubmit: [true],
+        confirm: [{ state: "sent" }],
+      },
+      { mediaFirst: true, media: ["/data/media/abc/photo.jpg"] },
+    );
+
+    assert.equal(outcome.kind, "published");
+    const attached = calls.indexOf("attachMedia:/data/media/abc/photo.jpg");
+    const typed = calls.findIndex((call) => call.startsWith("enterText"));
+    assert.ok(typed > attached, "there is nowhere to type until the file is in");
+  });
+
+  test("the screens between upload and caption are walked in order", async () => {
+    const { outcome, calls } = await run(
+      {
+        probeUpload: ["composer"],
+        probe: ["composer"],
+        clickSubmit: [true],
+        confirm: [{ state: "sent" }],
+      },
+      {
+        mediaFirst: true,
+        media: ["/data/media/abc/photo.jpg"],
+        afterAttach: [
+          { click: "#crop-next", waitFor: "#filter-screen", label: "crop" },
+          { click: "#filter-next", waitFor: "#caption-screen", label: "filter" },
+        ],
+      },
+    );
+
+    assert.equal(outcome.kind, "published");
+    const order = [
+      calls.indexOf("advance:#crop-next"),
+      calls.indexOf("present:#filter-screen"),
+      calls.indexOf("advance:#filter-next"),
+      calls.indexOf("present:#caption-screen"),
+      calls.findIndex((call) => call.startsWith("enterText")),
+    ];
+    assert.ok(
+      order.every((position, index) => position >= 0 && (index === 0 || position > order[index - 1]!)),
+      `steps ran out of order: ${JSON.stringify(order)}`,
+    );
+  });
+
+  test("a step whose control never appears names the step that failed", async () => {
+    const { outcome, calls } = await run(
+      { probeUpload: ["composer"], probe: ["composer"], advance: [false] },
+      {
+        mediaFirst: true,
+        media: ["/data/media/abc/photo.jpg"],
+        afterAttach: [{ click: "#crop-next", waitFor: "#filter-screen", label: "crop" }],
+      },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.match(outcome.detail, /crop/, "the operator should know which screen stalled");
+    assert.ok(!calls.includes("clickSubmit"));
+  });
+
+  test("a step that clicks but never advances is not treated as progress", async () => {
+    const { outcome, calls } = await run(
+      {
+        probeUpload: ["composer"],
+        probe: ["composer"],
+        advance: [true],
+        present: [false],
+      },
+      {
+        mediaFirst: true,
+        media: ["/data/media/abc/photo.jpg"],
+        afterAttach: [{ click: "#crop-next", waitFor: "#filter-screen", label: "crop" }],
+      },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.match(outcome.detail, /did not move past its crop step/);
+    assert.ok(!calls.includes("clickSubmit"));
+  });
+
+  test("an upload-first network with no caption field posts nothing", async () => {
+    const { outcome, calls } = await run(
+      { probeUpload: ["composer"], probe: ["waiting"] },
+      { mediaFirst: true, media: ["/data/media/abc/photo.jpg"] },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.match(outcome.detail, /never showed a caption field/);
+    assert.ok(!calls.includes("clickSubmit"));
   });
 });

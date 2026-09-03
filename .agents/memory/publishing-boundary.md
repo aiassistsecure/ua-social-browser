@@ -31,3 +31,27 @@ work near this as security-critical rather than as plumbing.
 - Live network views render only in the shell. Social networks block framing, so
   the web surface shows an explicit "runs in the desktop shell" state instead of
   a mocked feed.
+
+## One flow, no forks
+
+Every driven network goes through `compose-driver.ts`. There are no bespoke
+submit paths, and adding one is a regression even when it looks locally
+simpler.
+
+X used to be the exception, and the exception is what proved the rule. Its
+`xSubmit` predated the shared flow's guard for "the page bounced to a login
+right after submit, so whether the post went out is unknown". The shared flow
+returns `login` and reports the attempt as unconfirmed. `xSubmit` decided
+success by "the editor is gone and we are no longer on `/compose/`" — which a
+login page satisfies — and so reported a **phantom post**, on the single
+adapter that had ever been verified against a real account.
+
+The lesson is not "X had a bug". It is that a fork stops receiving fixes, and
+the fixes in this file are the ones that keep the app from lying about whether
+something reached an audience. Add a network with a `COMPOSERS` entry.
+
+**Absence of the editor must never be the only success signal.** It is the
+weakest test in the flow and it is what both known phantom cases had in common
+— X's login bounce, and Facebook's dialog-scoped editor closing without a
+`stillComposingPath`. Prefer a positive signal: a toast, or a link to the post
+that was just created.

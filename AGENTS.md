@@ -371,6 +371,12 @@ Two open project tasks live here (see §11).
   and was recorded `failed`. `PRE_CONFIRM_SHARE` now guarantees confirmation a
   reserve, and `onPhase` logs every phase duration — read that log before
   theorising about a slow publish.
+- **A file dropped anywhere but a card is swallowed in `App.tsx`.** The default
+  action for a file dropped on a page is to navigate to it, and this page is the
+  privileged UI origin — the one view holding `window.uaShell`. A near miss
+  while attaching a photo would replace the whole app with an image viewer,
+  with no way back. The window-level listener prevents that and does nothing
+  else; cards that accept a drop call `preventDefault` themselves.
 - **Navigation** is section state in `App.tsx`, not a router.
   `onNavigate(section, { draftId })` focuses one post; the review queue widens
   its filter and scrolls to it. If a post can belong to another workspace,

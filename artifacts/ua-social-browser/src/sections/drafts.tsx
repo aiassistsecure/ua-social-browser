@@ -42,6 +42,7 @@ import {
   refuseAttachment,
   uploadMedia,
 } from '@/lib/media';
+import { draggingFiles, leftTheCard } from '@/lib/drop';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { platformProfile } from '@/lib/platforms';
@@ -125,6 +126,13 @@ export function Drafts({
   const [pendingPublish, setPendingPublish] = useState<Draft | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  /**
+   * Which card a file is currently hovering over.
+   *
+   * One id rather than a boolean per card: only one thing can be dragged at a
+   * time, so this cannot get out of step with itself.
+   */
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const fileInputPrefix = useId();
   const publishPost = usePublishPost();
 
@@ -271,6 +279,27 @@ export function Drafts({
     } finally {
       setUploadingId(null);
     }
+  }
+
+  function onDragOver(draft: Draft, event: React.DragEvent) {
+    if (!draggingFiles(event.dataTransfer.types)) return;
+    // Without this the drop never fires: the default action for a dragged file
+    // is to navigate to it, and preventing it here is what marks the element
+    // as a valid target.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    if (dropTargetId !== draft.id) setDropTargetId(draft.id);
+  }
+
+  function onDragLeave(draft: Draft, event: React.DragEvent) {
+    if (!leftTheCard(event.currentTarget, event.relatedTarget as Node | null)) return;
+    if (dropTargetId === draft.id) setDropTargetId(null);
+  }
+
+  function onDrop(draft: Draft, event: React.DragEvent) {
+    event.preventDefault();
+    setDropTargetId(null);
+    void attachFiles(draft, event.dataTransfer.files);
   }
 
   function removeDraft(draft: Draft) {
@@ -487,6 +516,7 @@ export function Drafts({
             const isSending = sendingId === draft.id;
             const approved = Boolean(draft.approvedAt);
             const needsMedia = network.requiresMedia && draft.media.length === 0;
+            const isDropTarget = dropTargetId === draft.id;
             // No time set is not an unfinished schedule — it is the normal
             // case: it goes out when a person presses Post.
             const immediate = draft.scheduledFor === null;
@@ -499,11 +529,33 @@ export function Drafts({
                   else cardRefs.current.delete(draft.id);
                 }}
                 className={cn(
+                  'relative transition-colors',
                   focusedDraftId === draft.id &&
                     'ring-2 ring-primary ring-offset-2 ring-offset-background',
+                  isDropTarget && 'ring-2 ring-primary border-primary',
                 )}
+                // The whole card is the target, not a small strip inside it —
+                // a drop zone you have to aim for is worse than a button.
+                {...(locked
+                  ? {}
+                  : {
+                      onDragOver: (event: React.DragEvent) => onDragOver(draft, event),
+                      onDragLeave: (event: React.DragEvent) => onDragLeave(draft, event),
+                      onDrop: (event: React.DragEvent) => onDrop(draft, event),
+                    })}
                 data-testid={`draft-${draft.id}`}
               >
+                {isDropTarget ? (
+                  <div
+                    className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-background/85"
+                    data-testid={`dropzone-${draft.id}`}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-medium text-primary">
+                      <ImagePlus className="h-4 w-4" />
+                      Drop to attach to this post
+                    </span>
+                  </div>
+                ) : null}
                 <CardContent className="space-y-3 p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <PlatformGlyph platform={draft.platform} tinted />

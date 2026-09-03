@@ -26,7 +26,12 @@ import type { WorkspaceDirectory, WorkspaceEntry } from "../workspace-directory"
 import { applyEmulation, contextFor, detachEmulation, identityFrom } from "../workspace-contexts";
 import { adapterFor, type PlatformAdapter } from "./adapters";
 import { resolveApprovedMedia } from "./approved-media";
-import { resolveIdentity } from "./identity";
+import { parseAccountId, resolveIdentity } from "./identity";
+import {
+  createIdentityCache,
+  identityCacheKey,
+  type CachedHandle,
+} from "./identity-cache";
 import { runInPage } from "./page";
 import { createLogger, errorFields } from "../logger";
 
@@ -63,6 +68,33 @@ const SETUP_BUDGET_MS = 12_000;
  * exactly the ambiguity the whole design exists to avoid.
  */
 export const PUBLISH_WORST_CASE_MS = SETUP_BUDGET_MS + COMPOSE_BUDGET_MS + 3_000;
+
+/**
+ * How long the handle read gets before the answer is "unknown".
+ *
+ * Reading the handle means asking a live page a question, and a busy
+ * single-page app can take its time answering: this cost **6080 ms** in the
+ * field, on an endpoint the UI polls. Nothing about a session badge is worth
+ * six seconds of a polled request, and the operator is better served by a fast
+ * "couldn't read it" than a slow name.
+ *
+ * A timed-out read is abandoned, not cancelled — the page keeps evaluating and
+ * simply has nobody waiting. That is harmless: the read takes no locks and
+ * writes nothing.
+ */
+const IDENTITY_READ_BUDGET_MS = 1_200;
+
+/** How long a handle that *was* read may be reused. */
+const IDENTITY_CACHE_TTL_MS = 30_000;
+
+/**
+ * How long an unreadable handle may be reused.
+ *
+ * Deliberately short. The usual reason a handle cannot be read is that the
+ * page has not finished arriving, which fixes itself — caching that answer for
+ * as long as a real one would turn a passing miss into a lasting "unknown".
+ */
+const IDENTITY_CACHE_FAILURE_TTL_MS = 4_000;
 
 /** Resolves when `work` settles or `ms` elapses, whichever comes first. */
 async function atMost<T>(work: Promise<T>, ms: number): Promise<T | "timeout"> {
@@ -128,6 +160,13 @@ export function createPublisher(deps: {
 }): PublisherPort {
   const { directory, ledger, tabs, dataDir } = deps;
 
+  // Only the handle is remembered, and only bound to the account the cookies
+  // report. See `identity-cache.ts` for why that binding is the safety rule.
+  const handles = createIdentityCache({
+    ttlMs: IDENTITY_CACHE_TTL_MS,
+    failureTtlMs: IDENTITY_CACHE_FAILURE_TTL_MS,
+  });
+
   async function signedIn(
     entry: WorkspaceEntry,
     adapter: PlatformAdapter,
@@ -168,11 +207,30 @@ export function createPublisher(deps: {
   async function whoIsSignedIn(entry: WorkspaceEntry, adapter: PlatformAdapter) {
     const context = contextFor(identityForEntry(entry));
 
-    return resolveIdentity(adapter.identity, {
-      async cookie(name: string) {
-        const cookies = await context.cookies.get({ url: adapter.origin, name });
-        return cookies[0]?.value;
-      },
+    const readCookie = async (name: string) => {
+      const cookies = await context.cookies.get({ url: adapter.origin, name });
+      return cookies[0]?.value;
+    };
+
+    // The account id comes from the cookie jar: local, immediate, and never
+    // cached. It is read first because it is what a remembered handle is bound
+    // to — a handle may only be reused while the account behind it is the same.
+    const idCookie = adapter.identity?.idCookie;
+    const accountId = idCookie
+      ? parseAccountId(await readCookie(idCookie.name), idCookie.pattern)
+      : undefined;
+
+    const key = identityCacheKey(entry.id, adapter.platform);
+    const remembered = handles.get(key, accountId);
+    if (remembered) {
+      return { ...(accountId ? { accountId } : {}), ...remembered };
+    }
+
+    /** Set when the page read ran out of time, so the reason can say so. */
+    let readTimedOut = false;
+
+    const identity = await resolveIdentity(adapter.identity, {
+      cookie: readCookie,
 
       async pageText(selectors: string[]) {
         const contents = tabs.liveContents?.(entry.id) ?? null;
@@ -182,7 +240,7 @@ export function createPublisher(deps: {
           // Text plus the attributes that carry a name in practice. Read-only,
           // and scoped to the first element any selector matches — a page is
           // full of other people's handles.
-          return await runInPage<string | null>(
+          const read = runInPage<string | null>(
             contents as never,
             (input: { selectors: string[] }) => {
               for (const selector of input.selectors) {
@@ -210,6 +268,18 @@ export function createPublisher(deps: {
             },
             { selectors },
           );
+
+          const settled = await atMost(read, IDENTITY_READ_BUDGET_MS);
+          if (settled === "timeout") {
+            readTimedOut = true;
+            log.warn("Gave up reading the signed-in account from the page", {
+              workspaceId: entry.id,
+              platform: adapter.platform,
+              budgetMs: IDENTITY_READ_BUDGET_MS,
+            });
+            return "";
+          }
+          return settled;
         } catch (error) {
           log.warn("Could not read the signed-in account from the page", {
             workspaceId: entry.id,
@@ -220,6 +290,24 @@ export function createPublisher(deps: {
         }
       },
     });
+
+    // A read that ran out of time is not a network that moved its markup, and
+    // saying so would send the next person hunting for a selector that is
+    // fine. The operator sees this text verbatim, so it has to be true.
+    if (readTimedOut && !identity.accountHandle) {
+      identity.handleUnknown =
+        "The page was too busy to say which account is signed in. It will be read again shortly.";
+    }
+
+    // Remember the handle only. `authenticated` and the account id stay live.
+    const remember: CachedHandle = {
+      accountHandle: identity.accountHandle,
+      handleSource: identity.handleSource,
+      handleUnknown: identity.handleUnknown,
+    };
+    handles.set(key, accountId, remember);
+
+    return identity;
   }
 
   async function sessionStatus(
@@ -433,6 +521,11 @@ export function createPublisher(deps: {
       // The tab carries this workspace's session and UA profile because it is
       // opened under the same identity every other view of this workspace uses.
       await tabs.openOrFocus(workspaceId, adapter.signInUrl);
+
+      // Whoever was signed in here may not be in a moment. Drop the
+      // remembered handle so the next status read goes back to the session
+      // rather than repeating a name that is about to be replaced.
+      handles.invalidate(identityCacheKey(workspaceId, adapter.platform));
     } catch (error) {
       log.error("Sign-in tab failed to open", { workspaceId, ...errorFields(error) });
       return {

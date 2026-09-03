@@ -43,7 +43,13 @@ told to someone about their own account.
 2. **`published` requires the network's own confirmation.** Submitted-but-
    unconfirmed is its own outcome (`409`), is recorded as spent in the ledger,
    and is **never retried automatically** — an automatic retry there is how you
-   double-post. A person looks at the account and decides.
+   double-post. A person looks at the account and decides, and `attested`
+   records that decision: a status meaning *the operator found the post*, which
+   is never collapsed into `published` and always shown with the name of
+   whoever claimed it. An operator's word and the network's confirmation are
+   evidence of different kinds and must stay distinguishable in the ledger
+   forever. `attested` is not `approved` and not `scheduled`, so nothing will
+   ever send it again.
 3. **Approval is read from stored state, never asserted by the request.**
    Editing an approved draft clears the sign-off, which also makes it
    ineligible for scheduled dispatch.

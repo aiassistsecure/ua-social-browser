@@ -64,6 +64,8 @@ export type ShellWindowOptions = {
   privilegedPreload: string;
   toolbarPreload: string;
   toolbarHtml: string;
+  /** The app icon, used by the window and — on macOS — the dock. */
+  appIcon: string;
   directory: WorkspaceDirectory;
 };
 
@@ -84,6 +86,10 @@ export class ShellWindow {
       minHeight: 640,
       title: "UA Social Browser",
       backgroundColor: "#0b0b0f",
+      // Windows and Linux take the window's icon from here. macOS takes it
+      // from the bundle when packaged, and from the dock icon set in
+      // `main.ts` when run unpackaged.
+      icon: options.appIcon,
       show: false,
     });
 

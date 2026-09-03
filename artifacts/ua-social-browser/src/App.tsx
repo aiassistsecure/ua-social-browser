@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/toaster';
 import { BrowserChrome } from '@/components/app/browser-chrome';
+import { ShellMark } from '@/components/app/shell-mark';
 import { SideNav } from '@/components/app/side-nav';
 import { useBrowserState } from '@/hooks/use-browser-state';
 import { useScheduledDispatches } from '@/hooks/use-scheduler';
@@ -117,6 +118,15 @@ function Workbench() {
     return (
       <div className="flex min-h-screen items-center justify-center p-8 text-center">
         <div className="max-w-sm space-y-3">
+          {/*
+            The one screen shown before any workspace exists. In the chrome the
+            mark takes the active workspace's accent; here there is no workspace
+            to speak for, so it stands in the app's own primary.
+          */}
+          <ShellMark
+            accent="hsl(var(--primary))"
+            className="mx-auto h-11 w-11"
+          />
           <h1 className="text-lg font-semibold">No workspaces</h1>
           <p className="text-sm text-muted-foreground">
             Every workspace is an isolated browsing identity. Create one to

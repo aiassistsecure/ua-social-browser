@@ -36,11 +36,33 @@ export type ComposerConfig = {
   /**
    * Clicked when the composer is not already on screen. Facebook and Threads
    * post from a dialog that only exists after something is clicked.
+   *
+   * The match does not have to be the clickable element itself. Networks label
+   * these controls on an inner icon — Instagram's is
+   * `svg[aria-label="New post"]` inside an `<a role="link">` — and an `<svg>`
+   * is an `SVGElement`, which has no `.click()` at all. The driver walks up to
+   * the nearest thing that can actually be clicked, so a selector may name
+   * whichever element carries the label.
    */
   opener?: string;
   editor: string;
   editorKind: "contenteditable" | "textarea";
   submit: string;
+  /**
+   * The submit control's exact visible text, when the selector alone cannot
+   * pick it out.
+   *
+   * Instagram's caption screen is the case this exists for: its Share control
+   * is a `div[role="button"]` with obfuscated classes, no `aria-label` and no
+   * test id, sitting alongside five other controls that match identically —
+   * and "Back" comes first in document order. Clicking "the first enabled
+   * button" there walks the operator backwards out of the composer.
+   *
+   * Matched case-insensitively against trimmed text. LOCALE-DEPENDENT: on a
+   * non-English account nothing matches and the attempt refuses with nothing
+   * submitted, which is the safe direction to fail in.
+   */
+  submitText?: string;
   /**
    * Send Ctrl/Cmd+Enter as real input when no submit button is clickable. Some
    * composers render their button in a way no stable selector reaches, but
@@ -84,7 +106,21 @@ export type ComposerConfig = {
    * fails with the name of the step that could not be completed rather than
    * as a generic timeout.
    */
-  afterAttach?: Array<{ click: string; waitFor: string; label: string }>;
+  afterAttach?: Array<{
+    click: string;
+    /** The control's exact visible text. See `submitText` — same problem. */
+    clickText?: string;
+    /** A selector that only exists once this step has landed. */
+    waitFor?: string;
+    /**
+     * Text the dialog heading must show once this step has landed, for screens
+     * that share their markup with the one before and differ only in wording.
+     * Instagram's crop screen becomes "Edit" with no structural change worth
+     * selecting on.
+     */
+    waitForHeading?: { selector: string; text: string };
+    label: string;
+  }>;
   login: { selectors?: string; pathPattern?: string };
   confirmation: {
     toast?: string;
@@ -109,11 +145,18 @@ export type ComposerPage = {
   probe(): Promise<ProbeState>;
   /** Like `probe`, but satisfied by the upload control rather than the editor. */
   probeUpload(): Promise<ProbeState>;
+  /**
+   * Clicks the opener. `false` when nothing clickable was found *or* the click
+   * threw — either way no progress was made, so the caller must try again
+   * rather than assume the composer is on its way.
+   */
   openComposer(): Promise<boolean>;
   /** Clicks one advance step; `false` when its control is not there yet. */
-  advance(selector: string): Promise<boolean>;
+  advance(selector: string, text?: string): Promise<boolean>;
   /** True once `selector` is on the page. */
   present(selector: string): Promise<boolean>;
+  /** True once `selector`'s text contains `text`, case-insensitively. */
+  headingSays(selector: string, text: string): Promise<boolean>;
   enterText(text: string): Promise<{ ok: boolean; detail?: string }>;
   attachMedia(paths: string[]): Promise<{ ok: boolean; detail?: string }>;
   mediaReady(): Promise<boolean>;
@@ -135,8 +178,14 @@ export type ComposeFlowOptions = {
   mediaRequired?: boolean;
   /** The caption field only appears after a file is chosen. */
   mediaFirst?: boolean;
-  /** Screens between the upload and the caption. */
-  afterAttach?: Array<{ click: string; waitFor: string; label: string }>;
+  /**
+   * Screens between the upload and the caption.
+   *
+   * Mirrors `ComposerConfig["afterAttach"]`; see the notes there for why a
+   * step may need to name its control's text and why one with nothing to wait
+   * for is refused rather than assumed to have worked.
+   */
+  afterAttach?: ComposerConfig["afterAttach"];
   /**
    * Called as each phase ends, with how long it took.
    *
@@ -182,6 +231,18 @@ const PRE_CONFIRM_SHARE = 0.6;
 /** Confirmation always gets at least this long, whatever came before. */
 const MIN_CONFIRM_MS = 4_000;
 
+/**
+ * How many times the opener may be clicked, and how long to leave between
+ * attempts.
+ *
+ * More than one, because a single click can silently fail — the element found
+ * may not be the one carrying the handler, or the page may not have hydrated
+ * yet. Capped, because a network that opens a dialog per click would otherwise
+ * end up with a stack of them.
+ */
+const MAX_OPENER_CLICKS = 3;
+const OPENER_RETRY_MS = 1_200;
+
 export async function runComposeFlow(
   page: ComposerPage,
   options: ComposeFlowOptions,
@@ -217,24 +278,46 @@ export async function runComposeFlow(
     };
   }
 
-  // 1. Wait for the composer, opening it once if this network hides it behind
-  //    a button. A login screen instead is a different answer, not a failure:
+  // 1. Wait for the composer, opening it if this network hides it behind a
+  //    button. A login screen instead is a different answer, not a failure:
   //    the draft stays approved and the operator signs in.
   //
   //    On an upload-first network there is no caption field yet, so what is
   //    waited for is the upload control.
-  let opened = false;
+  //
+  //    The opener is clicked more than once. It used to be tried a single
+  //    time, with `opened = true` treated as done — so one click that landed
+  //    on the wrong element, or arrived before the nav had hydrated, spent the
+  //    rest of the budget polling for a composer nobody had asked for. This is
+  //    the same rule the attach steps already follow: a click is not progress
+  //    until the thing it should have produced actually appears.
+  let openerClicks = 0;
+  // Negative infinity, not 0: the flow's clock is injected and starts wherever
+  // the caller says, so `0` made the first attempt wait out the retry gap
+  // against a clock that began at 0 — and never clicked at all.
+  let lastClickAt = Number.NEGATIVE_INFINITY;
   let state: ProbeState = "waiting";
   const composerSince = now();
   while (now() < preConfirmDeadline) {
     state = mediaFirst ? await page.probeUpload() : await page.probe();
     if (state !== "waiting") break;
-    if (hasOpener && !opened) {
-      opened = await page.openComposer();
+
+    // Spaced out and capped: a composer that is merely slow must not be asked
+    // to open repeatedly, or a network that opens one dialog per click ends up
+    // with several stacked on top of each other.
+    if (
+      hasOpener &&
+      openerClicks < MAX_OPENER_CLICKS &&
+      now() - lastClickAt >= OPENER_RETRY_MS
+    ) {
+      const clicked = await page.openComposer();
+      lastClickAt = now();
+      if (clicked) openerClicks += 1;
     }
+
     await sleep(POLL_MS);
   }
-  phase("composer", composerSince, { state });
+  phase("composer", composerSince, { state, openerClicks });
 
   if (state === "login") {
     return {
@@ -244,10 +327,21 @@ export async function runComposeFlow(
   }
 
   if (state !== "composer") {
+    // Which of these is true matters. "The upload screen did not load" reads
+    // as a slow network, and that is what it said when Instagram's opener was
+    // throwing on every attempt — so the fault looked like Instagram's when it
+    // was three lines of ours. A refusal that misattributes the cause sends
+    // the next person hunting in the wrong place.
+    if (hasOpener && openerClicks === 0) {
+      return {
+        kind: "rejected",
+        detail: `Could not find anything on ${label} to open its composer with, so nothing was submitted. This build's selector for that control is out of date.`,
+      };
+    }
     return {
       kind: "rejected",
       detail: mediaFirst
-        ? `${label}'s upload screen did not load in time; nothing was submitted.`
+        ? `${label}'s upload screen did not appear after opening the composer; nothing was submitted.`
         : `${label}'s composer did not load in time; nothing was submitted.`,
     };
   }
@@ -314,9 +408,11 @@ export async function runComposeFlow(
   //     completed names itself, because "the composer timed out" would send
   //     someone hunting through the whole flow for a control that moved.
   for (const step of options.afterAttach ?? []) {
+    const stepSince = now();
+
     let advanced = false;
     while (now() < preConfirmDeadline && !advanced) {
-      advanced = await page.advance(step.click);
+      advanced = await page.advance(step.click, step.clickText);
       if (!advanced) await sleep(POLL_MS);
     }
     if (!advanced) {
@@ -326,9 +422,25 @@ export async function runComposeFlow(
       };
     }
 
+    // What proves the step landed. A step with neither is a step that cannot
+    // be checked, and it is better to say so than to report a success nobody
+    // verified — Instagram's crop step used to wait for `div[role="dialog"]`,
+    // which was already on screen, so it passed without proving anything.
+    if (!step.waitFor && !step.waitForHeading) {
+      return {
+        kind: "rejected",
+        detail: `This build cannot tell whether ${label} moved past its ${step.label} step, so nothing was submitted.`,
+      };
+    }
+
     let arrived = false;
     while (now() < preConfirmDeadline && !arrived) {
-      arrived = await page.present(step.waitFor);
+      arrived = step.waitFor
+        ? await page.present(step.waitFor)
+        : await page.headingSays(
+            step.waitForHeading!.selector,
+            step.waitForHeading!.text,
+          );
       if (!arrived) await sleep(POLL_MS);
     }
     if (!arrived) {
@@ -337,6 +449,8 @@ export async function runComposeFlow(
         detail: `${label} did not move past its ${step.label} step, so nothing was submitted.`,
       };
     }
+
+    phase(`afterAttach:${step.label}`, stepSince);
   }
 
   // 2d. Now the caption field exists, so the approved words can go in.
@@ -473,23 +587,57 @@ export function composerPage(contents: WebContents, config: ComposerConfig): Com
       );
     },
 
-    async advance(selector: string) {
+    async advance(selector: string, text?: string) {
       return runInPage<boolean>(
         contents,
-        (input: { selector: string }) => {
+        (input: { selector: string; text?: string }) => {
           const controls = Array.from(
             document.querySelectorAll(input.selector),
           ) as HTMLElement[];
+          const wanted = input.text?.trim().toLowerCase();
+
           for (const control of controls) {
             if (control.getAttribute("aria-disabled") === "true") continue;
             if ((control as HTMLButtonElement).disabled) continue;
             if (control.offsetParent === null) continue;
-            control.click();
+
+            // Without this, "click the first enabled control" is whatever the
+            // network happens to put first — which on Instagram's crop and
+            // caption screens is "Back". The step then reports success while
+            // moving the operator backwards.
+            if (wanted !== undefined) {
+              if ((control.textContent ?? "").trim().toLowerCase() !== wanted) {
+                continue;
+              }
+            }
+
+            if (typeof control.click !== "function") continue;
+            try {
+              control.click();
+            } catch {
+              continue;
+            }
             return true;
           }
           return false;
         },
-        { selector },
+        { selector, text },
+      );
+    },
+
+    async headingSays(selector: string, text: string) {
+      return runInPage<boolean>(
+        contents,
+        (input: { selector: string; text: string }) => {
+          const wanted = input.text.trim().toLowerCase();
+          for (const el of Array.from(document.querySelectorAll(input.selector))) {
+            if ((el.textContent ?? "").trim().toLowerCase().includes(wanted)) {
+              return true;
+            }
+          }
+          return false;
+        },
+        { selector, text },
       );
     },
 
@@ -506,10 +654,36 @@ export function composerPage(contents: WebContents, config: ComposerConfig): Com
         contents,
         (cfg: ComposerConfig) => {
           if (!cfg.opener) return false;
-          const button = document.querySelector(cfg.opener) as HTMLElement | null;
-          if (!button) return false;
-          button.click();
-          return true;
+
+          // Every element the selector reaches, not just the first. Networks
+          // label these controls on an inner icon, so the first match is
+          // frequently a descendant that cannot be clicked.
+          const matches = Array.from(document.querySelectorAll(cfg.opener));
+          if (matches.length === 0) return false;
+
+          for (const match of matches) {
+            // `SVGElement` is not an `HTMLElement` and has no `.click()`.
+            // Instagram's opener match IS an `<svg>`, so calling `.click()` on
+            // it threw a TypeError and the composer never opened — verified
+            // against a real signed-in account.
+            const clickable = match.closest(
+              'a,button,[role="button"],[role="link"],[tabindex]',
+            ) as HTMLElement | null;
+            const target =
+              clickable ?? (match instanceof HTMLElement ? match : null);
+            if (!target || typeof target.click !== "function") continue;
+            if (target.offsetParent === null) continue;
+
+            try {
+              target.click();
+              return true;
+            } catch {
+              // A control that refuses the click is not progress. Try the next
+              // match rather than reporting an open that did not happen.
+              continue;
+            }
+          }
+          return false;
         },
         config,
       );
@@ -591,11 +765,28 @@ export function composerPage(contents: WebContents, config: ComposerConfig): Com
           const buttons = Array.from(
             document.querySelectorAll(cfg.submit),
           ) as HTMLElement[];
+          const wanted = cfg.submitText?.trim().toLowerCase();
+
           for (const button of buttons) {
             if (button.getAttribute("aria-disabled") === "true") continue;
             if ((button as HTMLButtonElement).disabled) continue;
             if (button.offsetParent === null) continue;
-            button.click();
+
+            // Instagram's caption screen matches six controls on this selector
+            // with "Back" first, so submitting "the first enabled one" leaves
+            // the composer instead of sending the post.
+            if (wanted !== undefined) {
+              if ((button.textContent ?? "").trim().toLowerCase() !== wanted) {
+                continue;
+              }
+            }
+
+            if (typeof button.click !== "function") continue;
+            try {
+              button.click();
+            } catch {
+              continue;
+            }
             return true;
           }
           return false;

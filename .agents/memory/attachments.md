@@ -53,10 +53,42 @@ session — attaching twice throws.
 - A missing file fails the whole dispatch rather than posting the attachments
   that did resolve.
 
-**Not verified:** every `fileInput` selector in `adapters.ts` is written from
-product knowledge and has never run against a real signed-in account. A drifted
-selector surfaces as a loud refusal, not a phantom post — but treat the
-selectors as unproven until someone watches a picture land.
+**Instagram is verified** against a real signed-in account (2026-09-03), and
+what that exercise found is the reason to distrust the rest. Three of its
+selectors were wrong, and none of the three was findable by reading:
+
+- `opener` matched `svg[aria-label="New post"]`, not the `<a role="link">`
+  around it. `SVGElement` has no `.click()`, so opening the composer threw a
+  TypeError on every attempt. **Instagram publishing had never worked and could
+  not have.** The driver now walks up from any match to the nearest clickable
+  ancestor, and retries a capped number of times instead of assuming one click
+  worked.
+- the crop and filter steps clicked "the first enabled `div[role="button"]` in
+  the dialog", which on both screens is **Back** — and each step's `waitFor`
+  was `div[role="dialog"]`, already on screen, so the step reported success
+  while walking backwards. Steps now name their control's text, and a step with
+  nothing real to wait for is refused rather than assumed.
+- `mediaAttached` looked for an `<img>` or `<canvas>`. Instagram renders the
+  attachment as `background-image: url(blob:…)` on a bare div; the dialog
+  contains no image element at all.
+
+The verified flow: feed → `a[role="link"]:has(svg[aria-label="New post"])` →
+"Create new post" (a `<button>` "Select from computer" over a hidden
+`input[type="file"]`) → **Crop** → Next → **Edit** (filters) → Next → caption
+(`div[contenteditable="true"][role="textbox"]`, aria-label "Write a
+caption...") → **Share**.
+
+Instagram's controls carry obfuscated classes, no test ids and no aria-labels,
+so their visible text is genuinely the only thing separating Next and Share
+from Back. **Those text matchers are locale-dependent**: a non-English account
+matches nothing and refuses with nothing submitted. Safe, but a real limit.
+
+**Still not verified:** every other network's `fileInput` and composer selectors
+are written from product knowledge and have never run against a real account.
+Instagram is the evidence that "it reads correctly" is worth very little here.
+`test/instagram-config.test.ts` locks in the shape of the mistakes rather than
+the selectors — no step may click whichever control comes first, and no step
+may claim success without something real to wait for.
 
 **Upload-first networks.** Instagram and Pinterest have no caption field until
 an image is in, so `mediaFirst` flips the order: wait for the *upload control*

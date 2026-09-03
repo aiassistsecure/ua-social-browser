@@ -119,7 +119,11 @@ function driven(label: string, config: ComposerConfig) {
  * `aria-label` or a `data-testid` alongside the obvious selector buys real
  * resilience for no complexity.
  */
-const COMPOSERS: Record<string, ComposerConfig> = {
+/**
+ * Exported for the config guards in `test/instagram-config.test.ts`, which
+ * assert properties across every network rather than one at a time.
+ */
+export const COMPOSERS: Record<string, ComposerConfig> = {
   /**
    * X, on the shared flow.
    *
@@ -248,31 +252,76 @@ const COMPOSERS: Record<string, ComposerConfig> = {
    * double-click on the crop step would look like progress and land the flow on
    * the wrong screen with no way to tell.
    */
+  /**
+   * Instagram, verified against a real signed-in account on 2026-09-03.
+   *
+   * Every selector below was read off the live DOM rather than written from
+   * product knowledge, because the guessed version could never have worked.
+   * Three of its selectors were wrong in ways that a careful reading would not
+   * have caught:
+   *
+   *  - `opener` matched the `svg[aria-label="New post"]` rather than the
+   *    `<a role="link">` around it. `SVGElement` has no `.click()`, so opening
+   *    the composer threw every single time.
+   *  - the crop and filter steps clicked "the first enabled `div[role=button]`
+   *    in the dialog", which on both screens is **Back**. The flow walked
+   *    backwards and reported success, because the step's `waitFor` was
+   *    `div[role="dialog"]` — already on screen, so it proved nothing.
+   *  - `mediaAttached` looked for an `<img>` or a `<canvas>`. Instagram renders
+   *    the attached picture as a `background-image: url(blob:…)` on a bare
+   *    div, so there is no image element in the dialog at all.
+   *
+   * The screens, in order: the feed, then a "Create new post" dialog with a
+   * "Select from computer" button over a hidden file input, then "Crop", then
+   * "Edit" (the filter list), then the caption screen with Share.
+   *
+   * TEXT MATCHERS ARE LOCALE-DEPENDENT. Instagram gives these controls
+   * obfuscated classes, no test ids and no aria-labels, so their visible text
+   * is genuinely the only thing that distinguishes Next and Share from Back.
+   * On a non-English account nothing matches, and the attempt refuses with
+   * nothing submitted — the safe direction to fail in, but a real limit.
+   */
   instagram: {
+    // The label sits on an inner <svg>; the driver walks up to the anchor.
     opener:
-      'svg[aria-label="New post"], a[href="#"][role="link"] svg[aria-label="New post"], div[role="button"]:has(svg[aria-label="New post"])',
+      'a[role="link"]:has(svg[aria-label="New post"]), div[role="button"]:has(svg[aria-label="New post"]), svg[aria-label="New post"]',
+    // Verified: hidden, multiple, inside the dialog.
+    // accept="image/avif,image/jpeg,image/png,image/heic,image/heif,video/mp4,video/quicktime"
     fileInput: 'input[type="file"][accept*="image"]',
-    mediaAttached: 'div[role="dialog"] img[src^="blob:"], div[role="dialog"] canvas',
+    // The blob URL is in an inline style attribute, which is what makes this
+    // reachable by a selector at all. Verified: exactly one match, on the crop
+    // screen, and gone again by the caption screen.
+    mediaAttached: 'div[role="dialog"] [style*="blob:"]',
     mediaRequired: true,
     mediaFirst: true,
     afterAttach: [
       {
-        click: 'div[role="dialog"] div[role="button"]:not([aria-disabled="true"])',
-        waitFor: 'div[role="dialog"]',
+        click: 'div[role="dialog"] div[role="button"]',
+        clickText: "Next",
+        // Crop becomes "Edit" with no structural change worth selecting on.
+        waitForHeading: { selector: 'div[role="dialog"] div[role="heading"]', text: "Edit" },
         label: "crop",
       },
       {
-        click: 'div[role="dialog"] div[role="button"]:not([aria-disabled="true"])',
-        waitFor: 'div[role="dialog"] textarea, div[role="dialog"] div[contenteditable="true"]',
+        click: 'div[role="dialog"] div[role="button"]',
+        clickText: "Next",
+        // The caption field only exists on the screen after the filters, so
+        // its presence is real proof this step landed.
+        waitFor: 'div[role="dialog"] div[contenteditable="true"][role="textbox"]',
         label: "filter",
       },
     ],
+    // Verified: aria-label and aria-placeholder are both "Write a caption...".
     editor:
-      'div[role="dialog"] textarea[aria-label*="aption"], div[role="dialog"] div[contenteditable="true"][role="textbox"]',
+      'div[role="dialog"] div[contenteditable="true"][role="textbox"], div[role="dialog"] textarea[aria-label*="aption"]',
     editorKind: "contenteditable",
-    submit: 'div[role="dialog"] div[role="button"]:not([aria-disabled="true"])',
+    submit: 'div[role="dialog"] div[role="button"]',
+    submitText: "Share",
     login: { selectors: 'input[name="password"]', pathPattern: "^/accounts/login" },
     confirmation: {
+      // UNVERIFIED: no post has been put through this flow yet, and Instagram
+      // defines no `toast` selector here, so these strings are unreachable
+      // today. The flow falls back to the composer closing.
       successText: "post shared|your post has been shared",
       errorText: "went wrong|couldn't|could not|failed|try again",
     },

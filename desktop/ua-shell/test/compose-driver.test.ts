@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   runComposeFlow,
+  type ComposeFlowOptions,
   type ComposerPage,
   type ConfirmState,
   type ProbeState,
@@ -34,6 +35,8 @@ type Script = {
   probeUpload?: ProbeState[];
   advance?: boolean[];
   present?: boolean[];
+  headingSays?: boolean[];
+  openComposer?: boolean[];
   enterText?: { ok: boolean; detail?: string };
   attachMedia?: { ok: boolean; detail?: string };
   mediaReady?: boolean[];
@@ -63,17 +66,21 @@ function fakePage(script: Script) {
       calls.push("probeUpload");
       return next(script.probeUpload, "composer");
     },
-    async advance(selector: string) {
-      calls.push(`advance:${selector}`);
+    async advance(selector: string, text?: string) {
+      calls.push(`advance:${selector}${text ? `:${text}` : ""}`);
       return next(script.advance, true);
     },
     async present(selector: string) {
       calls.push(`present:${selector}`);
       return next(script.present, true);
     },
+    async headingSays(selector: string, text: string) {
+      calls.push(`headingSays:${selector}:${text}`);
+      return next(script.headingSays, true);
+    },
     async openComposer() {
       calls.push("openComposer");
-      return true;
+      return next(script.openComposer, true);
     },
     async enterText(text: string) {
       calls.push(`enterText:${text}`);
@@ -125,7 +132,7 @@ function run(
     reportsMediaReady: boolean;
     mediaRequired: boolean;
     mediaFirst: boolean;
-    afterAttach: Array<{ click: string; waitFor: string; label: string }>;
+    afterAttach: NonNullable<ComposeFlowOptions["afterAttach"]>;
     budgetMs: number;
   }> = {},
 ) {
@@ -169,13 +176,48 @@ describe("the shared composer flow", () => {
     assert.ok(!calls.includes("clickSubmit"), "nothing may be submitted without a composer");
   });
 
-  test("a hidden composer is opened once before giving up on it", async () => {
-    const { calls } = await run({ probe: ["waiting", "waiting", "composer"] }, { hasOpener: true });
+  test("a hidden composer is asked to open, and the click is not assumed to work", async () => {
+    // This used to assert the opener was clicked exactly once, which encoded a
+    // real bug as intended behaviour: one click that silently failed doomed
+    // the whole attempt. Instagram's opener matched an `<svg>`, whose `click`
+    // is `undefined`, so on that network the single click ALWAYS threw and the
+    // composer could never open. A click is not progress until the thing it
+    // should have produced appears.
+    const { calls } = await run(
+      { probe: ["waiting", "waiting", "composer"] },
+      { hasOpener: true },
+    );
 
-    assert.equal(
-      calls.filter((call) => call === "openComposer").length,
-      1,
-      "the opener is clicked once, not on every poll",
+    assert.ok(
+      calls.filter((call) => call === "openComposer").length >= 1,
+      "a hidden composer must actually be asked to open",
+    );
+  });
+
+  test("an opener that keeps failing is retried, but not forever", async () => {
+    const { calls } = await run(
+      // Never opens: every poll still reports waiting.
+      { probe: ["waiting"], openComposer: [true, true, true, true, true, true] },
+      // The real compose budget. At the harness default of 5s the confirmation
+      // reserve leaves barely a second before the pre-confirm cap, which is
+      // correctly too little time to retry anything.
+      { hasOpener: true, budgetMs: 18_000 },
+    );
+
+    const clicks = calls.filter((call) => call === "openComposer").length;
+    assert.ok(clicks > 1, "one failed click must not doom the attempt");
+    assert.ok(
+      clicks <= 3,
+      `capped so a dialog-per-click network cannot stack them, got ${clicks}`,
+    );
+  });
+
+  test("a composer already on screen is never asked to open", async () => {
+    const { calls } = await run({ probe: ["composer"] }, { hasOpener: true });
+
+    assert.ok(
+      !calls.includes("openComposer"),
+      "clicking an opener when the composer is already up can close it again",
     );
   });
 
@@ -541,5 +583,88 @@ describe("the shared composer flow", () => {
     for (const p of phases) {
       assert.equal(typeof p.ms, "number");
     }
+  });
+});
+
+describe("advance steps on a screen full of identical controls", () => {
+  const CLICK = 'div[role="dialog"] div[role="button"]';
+
+  test("a step names the control it wants, rather than taking the first one", async () => {
+    // Instagram's crop and caption screens match this selector five and six
+    // times, with **Back** first in document order. "Click the first enabled
+    // control" walked the operator backwards and then reported success.
+    const { outcome, calls } = await run(
+      { probe: ["composer"], probeUpload: ["composer"] },
+      {
+        mediaFirst: true,
+        media: ["/tmp/a.png"],
+        afterAttach: [
+          {
+            click: CLICK,
+            clickText: "Next",
+            waitFor: "#caption",
+            label: "crop",
+          },
+        ],
+        budgetMs: 18_000,
+      },
+    );
+
+    assert.ok(
+      calls.includes(`advance:${CLICK}:Next`),
+      `the wanted control must be named; got ${JSON.stringify(calls.filter((c) => c.startsWith("advance")))}`,
+    );
+    // Proof the step was actually cleared rather than stalling on it.
+    assert.ok(
+      calls.includes("clickSubmit"),
+      `the flow must reach the submit; outcome was ${outcome.kind}: ${String(outcome.detail ?? "")}`,
+    );
+  });
+
+  test("a step waits on the heading when the markup does not change", async () => {
+    const { calls } = await run(
+      { probe: ["composer"], probeUpload: ["composer"] },
+      {
+        mediaFirst: true,
+        media: ["/tmp/a.png"],
+        afterAttach: [
+          {
+            click: CLICK,
+            clickText: "Next",
+            waitForHeading: { selector: "#head", text: "Edit" },
+            label: "crop",
+          },
+        ],
+        budgetMs: 18_000,
+      },
+    );
+
+    assert.ok(
+      calls.includes("headingSays:#head:Edit"),
+      "a screen that differs only in wording is checked by its wording",
+    );
+  });
+
+  test("a step with nothing to wait for is refused, not assumed to work", async () => {
+    // The crop step used to wait for `div[role="dialog"]`, which was already on
+    // screen — so it passed without proving the screen had advanced at all. A
+    // step that cannot be checked must say so rather than report success.
+    const { outcome, calls } = await run(
+      { probe: ["composer"], probeUpload: ["composer"] },
+      {
+        mediaFirst: true,
+        media: ["/tmp/a.png"],
+        afterAttach: [{ click: CLICK, clickText: "Next", label: "crop" }],
+        budgetMs: 18_000,
+      },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.match(String(outcome.detail), /cannot tell/);
+    assert.match(String(outcome.detail), /crop/, "the step names itself");
+    assert.ok(
+      !calls.includes("clickSubmit"),
+      "nothing may be submitted through a step that was never verified",
+    );
   });
 });

@@ -515,3 +515,226 @@
     }
   }
 }
+
+/*
+ * The composer's wait, and its arrival.
+ *
+ * Generating takes seconds, and the only sign of it used to be a disabled
+ * button with a spinner in it. That reads as "nothing is happening" — the one
+ * thing the operator should never have to wonder about while a model is
+ * writing on their behalf.
+ *
+ * So the wait is furnished. Ghost cards stand exactly where the real ones will
+ * land, as many as were asked for, with a prism band sweeping across them; the
+ * button carries the same light while it works. When the options arrive they
+ * rise into place one after another rather than appearing all at once.
+ *
+ * The palette is deliberately the dissolve's palette. One holographic
+ * vocabulary for the whole composer: this is what it looks like when the pool
+ * is being written to, and the dissolve is what it looks like when something
+ * leaves it.
+ */
+@layer utilities {
+  /*
+   * A band travelling across a card, continuously.
+   *
+   * Position rather than transform, over a repeating tile half the card's
+   * width, so there is always a band on screen. A single band translated
+   * across leaves most of each cycle empty — and an empty card during a wait
+   * is the exact thing this is here to prevent.
+   *
+   * Linear, because a band that eases is a band that hesitates in the middle,
+   * and the whole point is steady progress.
+   */
+  @keyframes ua-holo-shimmer {
+    from {
+      background-position: 0% 0;
+    }
+    to {
+      background-position: 100% 0;
+    }
+  }
+
+  /* The faint breathing of the placeholder bars underneath the band. */
+  @keyframes ua-ghost-breathe {
+    0%,
+    100% {
+      opacity: 0.5;
+    }
+    50% {
+      opacity: 0.85;
+    }
+  }
+
+  /*
+   * A ghost is a real card's silhouette, not a spinner. It occupies the space
+   * the option will occupy, so nothing jumps when the text arrives.
+   */
+  .ua-ghost {
+    position: relative;
+    overflow: hidden;
+    border-style: dashed;
+  }
+
+  .ua-ghost::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    /*
+     * A narrow stripe, not a gradient across the whole card.
+     *
+     * The first version spread its stops from 24% to 76%, which at card width
+     * is a ~600px wash — it read as a rainbow smear rather than something
+     * travelling. The 420ms dissolve gets away with a wide band because nobody
+     * inspects a flash; a band that loops invites inspection, so it has to be
+     * a band. Two hues rather than three for the same reason: this is the
+     * ambient state, and the full prism is saved for the arrival.
+     */
+    /*
+     * The wide prism, kept. A narrow single-hue stripe was tried and lost the
+     * character of the thing — this is the same band the dissolve uses, and
+     * one vocabulary across the composer matters more than restraint here.
+     *
+     * What did have to change is the motion. A single band translated across
+     * spends most of its cycle off the card, and a wait that goes blank is
+     * worse than no effect at all. So it is a repeating tile whose position
+     * animates: there is always a band crossing, and it moves briskly.
+     */
+    background-image: linear-gradient(
+      100deg,
+      transparent 24%,
+      rgb(124 92 255 / 0.3) 40%,
+      rgb(64 217 160 / 0.34) 50%,
+      rgb(255 141 105 / 0.3) 60%,
+      transparent 76%
+    );
+    background-size: 100% 100%;
+    background-repeat: repeat-x;
+    animation: ua-holo-shimmer 900ms linear infinite;
+  }
+
+  .ua-ghost-bar {
+    border-radius: 0.375rem;
+    background-color: hsl(var(--muted));
+    animation: ua-ghost-breathe 1100ms ease-in-out infinite;
+  }
+
+  /*
+   * The reveal.
+   *
+   * Each arriving card rises a short way with a single band crossing it. The
+   * stagger is set per card from the component, so the batch lands as a run
+   * rather than a flash — eight options appearing simultaneously is a jolt,
+   * and one after another reads as them being written.
+   */
+  @keyframes ua-holo-reveal {
+    0% {
+      opacity: 0;
+      transform: translateY(10px) scale(0.985);
+      filter: saturate(0.8);
+    }
+    45% {
+      filter: saturate(1.45) brightness(1.06);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: saturate(1);
+    }
+  }
+
+  .ua-revealing {
+    /* Held invisible through the stagger so nothing flashes before its turn. */
+    opacity: 0;
+    position: relative;
+    overflow: hidden;
+    animation: ua-holo-reveal 480ms cubic-bezier(0.16, 0.84, 0.44, 1) forwards;
+    animation-delay: var(--ua-reveal-delay, 0ms);
+  }
+
+  .ua-revealing::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background: linear-gradient(
+      100deg,
+      transparent 20%,
+      rgb(124 92 255 / 0.32) 38%,
+      rgb(64 217 160 / 0.38) 50%,
+      rgb(255 141 105 / 0.32) 62%,
+      transparent 80%
+    );
+    animation: ua-holo-sweep 620ms ease-out forwards;
+    animation-delay: var(--ua-reveal-delay, 0ms);
+  }
+
+  /*
+   * The button while the model is working.
+   *
+   * It stays disabled — the guard against a second request is behaviour, not
+   * decoration — but it stops looking inert.
+   */
+  @keyframes ua-charge-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgb(124 92 255 / 0.4);
+    }
+    50% {
+      box-shadow: 0 0 18px 2px rgb(124 92 255 / 0.32);
+    }
+  }
+
+  .ua-charging {
+    position: relative;
+    overflow: hidden;
+    animation: ua-charge-glow 1100ms ease-in-out infinite;
+    /* A disabled control is normally dimmed; this one is working, not unavailable. */
+    opacity: 1 !important;
+  }
+
+  .ua-charging::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background-image: linear-gradient(
+      100deg,
+      transparent 26%,
+      rgb(255 255 255 / 0.3) 50%,
+      transparent 74%
+    );
+    background-size: 100% 100%;
+    background-repeat: repeat-x;
+    animation: ua-holo-shimmer 900ms linear infinite;
+  }
+
+  /*
+   * All of the above is theatre around work that happens regardless. Anyone
+   * who has asked for less motion still gets the ghosts holding the space, the
+   * cards arriving, and a button that reads as busy — just without anything
+   * moving.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .ua-ghost::before,
+    .ua-ghost-bar,
+    .ua-charging,
+    .ua-charging::after {
+      animation: none;
+    }
+    .ua-revealing,
+    .ua-revealing::before {
+      animation: none;
+    }
+    .ua-revealing {
+      opacity: 1;
+    }
+    .ua-revealing::before {
+      opacity: 0;
+    }
+  }
+}

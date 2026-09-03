@@ -51,6 +51,47 @@ import {
 } from '@/lib/workspace';
 import type { Platform } from '@/types';
 
+/**
+ * Reveal timing. These must match `.ua-revealing` in `index.css`.
+ *
+ * The stagger is what makes a batch read as being written rather than
+ * appearing: eight cards landing at once is a jolt. The sweep is the longer of
+ * the two CSS animations, so it decides when the run is over.
+ */
+/**
+ * A card's silhouette while the model writes it.
+ *
+ * Sized to a real option — label row, three lines of body, a rationale line,
+ * a button row — because the point is that nothing moves when the text
+ * arrives. A spinner in the middle of an empty panel would tell the operator
+ * less and cost them a layout jump.
+ */
+function GhostSuggestion() {
+  return (
+    <Card className="ua-ghost" aria-hidden="true">
+      <CardContent className="space-y-3 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="ua-ghost-bar h-3 w-20" />
+          <div className="ua-ghost-bar h-3 w-12" />
+        </div>
+        <div className="space-y-2">
+          <div className="ua-ghost-bar h-3.5 w-full" />
+          <div className="ua-ghost-bar h-3.5 w-[92%]" />
+          <div className="ua-ghost-bar h-3.5 w-[64%]" />
+        </div>
+        <div className="ua-ghost-bar h-3 w-2/5" />
+        <div className="flex gap-2 pt-1">
+          <div className="ua-ghost-bar h-8 w-28" />
+          <div className="ua-ghost-bar h-8 w-20" />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+const REVEAL_STAGGER_MS = 70;
+const REVEAL_SWEEP_MS = 620;
+
 const TASKS: Array<{ id: AiSuggestionInputTask; label: string; hint: string }> = [
   { id: 'suggest', label: 'Suggest', hint: 'Draft new options from your notes' },
   { id: 'rewrite', label: 'Rewrite', hint: 'Keep the point, change the delivery' },
@@ -86,11 +127,27 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   // and judging a card removes that card. Keyed by id throughout — see
   // `lib/candidates.ts` for why an index key is unsafe here.
   const [suggestions, setSuggestions] = useState<Array<Candidate<AiSuggestion>>>([]);
+  /**
+   * Which end of the pool the pending batch will land on.
+   *
+   * The ghosts stand where the real cards will appear — below the existing
+   * options for "keep going", in their place for a fresh generation — so the
+   * list does not reshuffle when the text arrives.
+   */
+  const [pendingMode, setPendingMode] = useState<'replace' | 'more' | null>(null);
+  /**
+   * id -> position in the arriving batch, driving the reveal stagger.
+   *
+   * Keyed by id rather than index for the same reason the review flags are:
+   * a card removed mid-reveal must not hand its animation to a neighbour.
+   */
+  const [revealing, setRevealing] = useState<Record<string, number>>({});
   const [reviewed, setReviewed] = useState<Record<string, boolean>>({});
   const [dissolving, setDissolving] = useState<Record<string, true>>({});
   const nextOrdinal = useRef(1);
   /** Pending dissolve timers, so leaving the page mid-animation is harmless. */
   const dissolveTimers = useRef<number[]>([]);
+  const revealTimers = useRef<number[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const modelsQuery = useListAiModels();
@@ -100,6 +157,8 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     () => () => {
       for (const timer of dissolveTimers.current) window.clearTimeout(timer);
       dissolveTimers.current = [];
+      for (const timer of revealTimers.current) window.clearTimeout(timer);
+      revealTimers.current = [];
     },
     [],
   );
@@ -125,6 +184,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   function handleGenerate(mode: 'replace' | 'more' = 'replace') {
     if (!canSubmit) return;
     setErrorMessage(null);
+    setPendingMode(mode);
 
     suggest.mutate(
       {
@@ -143,6 +203,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
       {
         onSuccess: (result) => {
           let duplicates = 0;
+          let arrived: string[] = [];
           setSuggestions((current) => {
             const outcome =
               mode === 'more'
@@ -158,8 +219,34 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                   });
             nextOrdinal.current = outcome.nextOrdinal;
             duplicates = outcome.duplicates;
+            // Only what is actually new gets the reveal. On "keep going" the
+            // options already on screen must not re-animate — the operator may
+            // be reading one of them.
+            const before = new Set(current.map((candidate) => candidate.id));
+            arrived = outcome.candidates
+              .filter((candidate) => !before.has(candidate.id))
+              .map((candidate) => candidate.id);
             return outcome.candidates;
           });
+
+          setPendingMode(null);
+          if (arrived.length > 0) {
+            setRevealing(
+              Object.fromEntries(arrived.map((id, index) => [id, index])),
+            );
+            // Cleared once the last card has landed, so the class does not sit
+            // on the cards holding them at opacity 0 if anything re-renders.
+            const runFor =
+              REVEAL_STAGGER_MS * (arrived.length - 1) + REVEAL_SWEEP_MS + 80;
+            const timer = window.setTimeout(() => {
+              setRevealing({});
+              revealTimers.current = revealTimers.current.filter(
+                (candidate) => candidate !== timer,
+              );
+            }, runFor);
+            revealTimers.current.push(timer);
+          }
+
           if (mode === 'replace') setReviewed({});
           if (duplicates > 0) {
             toast({
@@ -187,6 +274,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           }));
         },
         onError: () => {
+          setPendingMode(null);
           setErrorMessage(
             'AiAssist could not generate suggestions. The request failed upstream — nothing was saved.',
           );
@@ -454,6 +542,10 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                       variant="outline"
                       onClick={() => handleGenerate('more')}
                       disabled={!canSubmit}
+                      // Disabled is the guard against a second request; the
+                      // glow is so a working control does not read as a dead
+                      // one. Only the button that was pressed lights up.
+                      className={cn(pendingMode === 'more' && 'ua-charging')}
                       title="Add another batch without clearing the ones already here"
                       data-testid="button-generate-more"
                     >
@@ -468,6 +560,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                   <Button
                     onClick={() => handleGenerate('replace')}
                     disabled={!canSubmit}
+                    className={cn(pendingMode === 'replace' && 'ua-charging')}
                     data-testid="button-generate"
                   >
                     {suggest.isPending ? (
@@ -496,7 +589,18 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
             </CardContent>
           </Card>
 
-          {suggestions.length === 0 ? (
+          {/*
+            A fresh generation replaces the list, so its ghosts stand where the
+            options will be. "Keep going" appends, so they come after the cards
+            already on screen — further down, where the new options land.
+          */}
+          {pendingMode === 'replace' ? (
+            <div className="space-y-4" data-testid="generating-ghosts">
+              {Array.from({ length: count }, (_, index) => (
+                <GhostSuggestion key={`ghost-${index}`} />
+              ))}
+            </div>
+          ) : suggestions.length === 0 ? (
             <Card className="border-dashed">
               <CardContent className="flex flex-col items-center gap-2 p-10 text-center">
                 <Sparkles className="h-6 w-6 text-muted-foreground" />
@@ -516,7 +620,23 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
               return (
                 <Card
                   key={suggestion.id}
-                  className={cn(dissolving[suggestion.id] && 'ua-dissolving')}
+                  className={cn(
+                    dissolving[suggestion.id] && 'ua-dissolving',
+                    // A card being dismissed is never also arriving; the
+                    // dissolve wins so a fast accept cannot fight the reveal.
+                    !dissolving[suggestion.id] &&
+                      revealing[suggestion.id] !== undefined &&
+                      'ua-revealing',
+                  )}
+                  style={
+                    revealing[suggestion.id] !== undefined
+                      ? ({
+                          ['--ua-reveal-delay' as string]: `${
+                            revealing[suggestion.id]! * REVEAL_STAGGER_MS
+                          }ms`,
+                        } as React.CSSProperties)
+                      : undefined
+                  }
                   data-testid={`suggestion-${suggestion.id}`}
                 >
                   <CardContent className="space-y-3 p-4">
@@ -606,6 +726,15 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
               );
             })
           )}
+
+          {/* "Keep going" adds to the pool, so the wait shows up below it. */}
+          {pendingMode === 'more' ? (
+            <div className="space-y-4" data-testid="generating-ghosts-more">
+              {Array.from({ length: count }, (_, index) => (
+                <GhostSuggestion key={`ghost-more-${index}`} />
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </SectionShell>

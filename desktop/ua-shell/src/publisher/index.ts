@@ -27,6 +27,7 @@ import { applyEmulation, contextFor, detachEmulation, identityFrom } from "../wo
 import { adapterFor, type PlatformAdapter } from "./adapters";
 import { resolveApprovedMedia } from "./approved-media";
 import { parseAccountId, resolveIdentity } from "./identity";
+import { deviceClassFor } from "./device";
 import {
   createIdentityCache,
   identityCacheKey,
@@ -421,7 +422,13 @@ export function createPublisher(deps: {
       // Struck here, after the page is up, rather than before setup ran.
       const deadline = Date.now() + COMPOSE_BUDGET_MS;
 
+      // Which composer the network will serve, decided by the profile this
+      // workspace runs under rather than by preference.
+      const device = deviceClassFor(entry.profile?.userAgent);
+
       return await adapter.submit({
+        device,
+        ...(entry.profile?.name ? { profileName: entry.profile.name } : {}),
         contents: window.webContents,
         body: input.body,
         media: media.paths,

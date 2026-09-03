@@ -25,9 +25,19 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { COMPOSERS, composerConfigFor } from "../src/publisher/adapters";
+import { COMPOSERS, composerConfigFor, graphedDeviceClasses } from "../src/publisher/adapters";
 
+/** The graph actually in use for both classes: route-driven, no navigation. */
 const instagram = composerConfigFor("instagram")!;
+
+/**
+ * The dialog graph — what a desktop browser gets from the feed.
+ *
+ * Still verified, still kept as the fallback if the create routes ever stop
+ * being addressable, so its guards stay. They point here explicitly now that
+ * `composerConfigFor` resolves to the route graph.
+ */
+const instagramDialog = COMPOSERS.instagram!;
 
 /**
  * Whether a selector could match several controls on one screen.
@@ -55,13 +65,13 @@ function isLoose(selector: string): boolean {
 }
 
 describe("the Instagram composer config", () => {
-  test("the opener can reach the clickable ancestor, not only the icon", () => {
+  test("the dialog graph's opener can reach the clickable ancestor, not only the icon", () => {
     // The bare `svg[...]` alternative may stay — the driver walks up from any
     // match — but something in the list has to name a real control, or the
     // config is relying entirely on that walk.
-    assert.ok(instagram.opener, "Instagram hides its composer behind a button");
+    assert.ok(instagramDialog.opener, "the dialog graph is reached by a button");
     assert.match(
-      instagram.opener,
+      instagramDialog.opener,
       /a\[role="link"\]|div\[role="button"\]/,
       "the opener must name the anchor or button that carries the click handler",
     );
@@ -88,8 +98,8 @@ describe("the Instagram composer config", () => {
     );
   });
 
-  test("both screens between the upload and the caption name their control", () => {
-    const steps = instagram.afterAttach ?? [];
+  test("the dialog graph's two screens both name their control", () => {
+    const steps = instagramDialog.afterAttach ?? [];
     assert.equal(steps.length, 2, "crop and filter");
 
     for (const step of steps) {
@@ -104,7 +114,7 @@ describe("the Instagram composer config", () => {
   test("neither step waits on something that is already true", () => {
     // `waitFor: 'div[role="dialog"]'` was the original bug: the dialog is on
     // screen for the whole flow, so the step passed without advancing.
-    for (const step of instagram.afterAttach ?? []) {
+    for (const step of instagramDialog.afterAttach ?? []) {
       assert.notEqual(
         step.waitFor,
         'div[role="dialog"]',
@@ -158,5 +168,70 @@ describe("every composer's submit", () => {
         `${network}'s submit selector is loose and has neither a text qualifier nor a hotkey fallback`,
       );
     }
+  });
+});
+
+describe("the UA profile picks the graph", () => {
+  test("Instagram has a graph written for both classes", () => {
+    // The case that started this: the operator's workspace runs the iPhone
+    // profile, Instagram served the mobile layout, and the desktop navigation
+    // selector had nothing to match. A network that serves two composers needs
+    // two graphs, chosen by what the network will actually send.
+    assert.deepEqual(graphedDeviceClasses("instagram").sort(), ["desktop", "mobile"]);
+  });
+
+  test("each class resolves to a usable graph", () => {
+    for (const device of ["desktop", "mobile"] as const) {
+      const graph = composerConfigFor("instagram", device);
+      assert.ok(graph, `${device} must resolve`);
+      assert.ok(graph.submit, `${device}'s graph needs a submit`);
+      assert.ok(graph.fileInput, `${device}'s graph needs an upload control`);
+    }
+  });
+
+  test("the graph in use needs no navigation click", () => {
+    // The whole reason it is route-driven: navigation is exactly what differs
+    // between a phone layout and a desktop one, so a flow that never touches
+    // it cannot be broken by that difference.
+    for (const device of ["desktop", "mobile"] as const) {
+      assert.equal(
+        composerConfigFor("instagram", device)!.opener,
+        undefined,
+        `${device}'s graph must not depend on finding a nav control`,
+      );
+    }
+  });
+
+  test("its steps are proven by the URL rather than by markup or wording", () => {
+    const steps = composerConfigFor("instagram", "mobile")!.afterAttach ?? [];
+    assert.ok(steps.length > 0);
+    for (const step of steps) {
+      assert.ok(
+        step.waitForPath,
+        `the ${step.label} step should use the URL, which cannot drift with a rename or a translation`,
+      );
+    }
+  });
+
+  test("a network with one composer ignores the class", () => {
+    // Only Instagram is known to serve two. Everything else must resolve
+    // identically for both, not become unpostable on a phone profile.
+    for (const platform of ["x", "linkedin", "pinterest", "tumblr"]) {
+      const desktop = composerConfigFor(platform, "desktop");
+      const mobile = composerConfigFor(platform, "mobile");
+      assert.ok(desktop, `${platform} must resolve for desktop`);
+      assert.equal(mobile, desktop, `${platform} must resolve identically for mobile`);
+    }
+  });
+
+  test("an unmapped class falls back rather than refusing", () => {
+    // A wrong-shaped graph fails loudly at the first probe. A network becoming
+    // unpostable because a class is unmapped is the worse outcome.
+    assert.ok(composerConfigFor("x", "mobile"));
+  });
+
+  test("an unknown network is still null", () => {
+    assert.equal(composerConfigFor("myspace", "desktop"), null);
+    assert.equal(composerConfigFor("myspace", "mobile"), null);
   });
 });

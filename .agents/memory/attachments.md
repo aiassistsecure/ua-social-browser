@@ -109,3 +109,53 @@ same shape of problem as Reddit's subreddit.
 **Still refusing:** TikTok and YouTube (a post needs a video, and this drives
 image composers rather than an encode-and-wizard flow) and Reddit (needs a
 community and a title).
+
+## Instagram serves two composers, and the UA profile decides which
+
+The first fix to the Instagram adapter was verified against a desktop UA and
+still failed on the owner's machine, with:
+
+> Could not find anything on Instagram to open its composer with
+
+His workspace runs the **Safari · iPhone 16** profile (393 × 852). The shell
+sends `Emulation.setUserAgentOverride` with `userAgentMetadata.mobile: true`,
+so Instagram serves the **mobile layout**: no left sidebar, no "New post" nav
+item, nothing for a desktop nav selector to match at any retry count. The
+window is 1280×900, but layout follows the UA, not the window.
+
+So the profile now picks the graph. `publisher/device.ts` derives a
+`DeviceClass` from the UA string, `SubmitContext` carries it, and `driven()`
+resolves the graph **per publish** rather than capturing one at module load.
+
+**Both classes drive the route flow**, which needs no navigation at all —
+navigation being precisely what differs between the layouts:
+
+| URL | what is there |
+| --- | --- |
+| `/create/select/` | the file input, present on load, no click |
+| `/create/style/` | filters; real `<button>`s; "Next" |
+| `/create/details/` | a `<textarea>` caption, and "Share" |
+
+No `div[role="dialog"]` anywhere, and every dialog-scoped selector from the
+first fix matches **zero** here. The caption is a `<textarea>`, not a
+contenteditable, and its aria-label carries a real ellipsis ("Write a
+caption…"), which is why the selector matches a substring. Steps are proven by
+`waitForPath` — the URL cannot drift with a class rename or a translation,
+which makes it a better signal than either markup or wording.
+
+The dialog graph is kept in `COMPOSERS.instagram` as the verified desktop
+fallback if the routes ever stop being addressable, and its guards still run
+against it explicitly.
+
+**NOT VERIFIED: both flows were driven under a desktop UA.** Nothing here has
+run with a phone's user agent. The route flow is assigned to `mobile` because
+it depends on no navigation, not because it has been watched working there. A
+failure now names the profile in the refusal, so the next person checks that
+before hunting selectors.
+
+**Known and unfixed:** every UA profile declares a viewport (the iPhone one
+says 393 × 852) and **nothing applies it**. `viewport` is not in
+`WorkspaceIdentity` and is not parsed by `workspace-directory.ts`, so the
+publish window stays hardcoded at 1280×900 — a phone's user agent sent from a
+desktop-sized window. `publisher/device.ts` has `parseViewport` and
+`publishViewportFor` ready for it; wiring them through is its own change.

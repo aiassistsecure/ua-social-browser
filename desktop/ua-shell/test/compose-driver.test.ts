@@ -36,6 +36,7 @@ type Script = {
   advance?: boolean[];
   present?: boolean[];
   headingSays?: boolean[];
+  currentPath?: string[];
   openComposer?: boolean[];
   enterText?: { ok: boolean; detail?: string };
   attachMedia?: { ok: boolean; detail?: string };
@@ -73,6 +74,10 @@ function fakePage(script: Script) {
     async present(selector: string) {
       calls.push(`present:${selector}`);
       return next(script.present, true);
+    },
+    async currentPath() {
+      calls.push('currentPath');
+      return next(script.currentPath, '/');
     },
     async headingSays(selector: string, text: string) {
       calls.push(`headingSays:${selector}:${text}`);

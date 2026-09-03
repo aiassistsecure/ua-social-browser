@@ -285,6 +285,18 @@ Two open project tasks live here (see §11).
   app-specific pieces in `components/app` and `sections`. Interactive elements
   carry `data-testid` (`button-*`, `filter-*`, `draft-<id>`, `queue-<id>`,
   `calendar-post-<id>`).
+- **The AI Composer is a pool, not a result set.** Suggestions accumulate:
+  "Keep going" appends a batch (duplicates dropped), "Start over" replaces.
+  Acting on a card — saved as a draft, or discarded — removes it, after a
+  ~420ms holo sweep (`.ua-dissolving` in `index.css`); the card is dropped from
+  state when the animation ends, because dropping it on click unmounts the
+  element and nothing plays. This is composer-only: the review queue and the
+  calendar keep every draft, which is where a saved one is worked on.
+  Candidates carry a **stable id and a fixed ordinal** (`lib/candidates.ts`).
+  Review state is keyed by that id and never by array index — with removable
+  cards an index key slides one card's "I read this and take responsibility for
+  it" onto different text, which then reaches drafts under a sign-off nobody
+  gave. There is a test named for that exact hazard.
 - **Navigation** is section state in `App.tsx`, not a router.
   `onNavigate(section, { draftId })` focuses one post; the review queue widens
   its filter and scrolls to it. If a post can belong to another workspace,

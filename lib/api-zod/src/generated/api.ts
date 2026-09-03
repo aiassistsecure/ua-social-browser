@@ -117,7 +117,7 @@ export const createAiSuggestionBodySourceTextMin = 3;
 export const createAiSuggestionBodySourceTextMax = 12000;
 
 export const createAiSuggestionBodyNumberOfSuggestionsDefault = 3;
-export const createAiSuggestionBodyNumberOfSuggestionsMax = 4;
+export const createAiSuggestionBodyNumberOfSuggestionsMax = 8;
 
 export const createAiSuggestionBodyMaxCharactersDefault = 1300;
 export const createAiSuggestionBodyMaxCharactersMin = 40;

@@ -362,6 +362,12 @@ Two open project tasks live here (see §11).
   read `.length` inside its `map`, and the section died in its error boundary,
   hiding three healthy drafts because one old one sat beside them. Hydration
   fills gaps in the in-memory copy only; it never rewrites the ledger.
+- **A file dropped anywhere but a card is swallowed in `App.tsx`.** The default
+  action for a file dropped on a page is to navigate to it, and this page is the
+  privileged UI origin — the one view holding `window.uaShell`. A near miss
+  while attaching a photo would replace the whole app with an image viewer,
+  with no way back. The window-level listener prevents that and does nothing
+  else; cards that accept a drop call `preventDefault` themselves.
 - **Navigation** is section state in `App.tsx`, not a router.
   `onNavigate(section, { draftId })` focuses one post; the review queue widens
   its filter and scrolls to it. If a post can belong to another workspace,

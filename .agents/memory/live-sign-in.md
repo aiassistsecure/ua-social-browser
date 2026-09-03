@@ -56,6 +56,28 @@ returns the embedded network view if it is loaded, otherwise a tab. The handle
 carries `handleSource: "session"`, and the UI names an account only when that
 field is set. Everything else is `handleUnknown`, shown verbatim.
 
+**The handle read is bounded and briefly cached.** Reading it means asking a
+live page a question, and a busy single-page app can take its time: this cost
+**6080 ms** in the field, on an endpoint the UI polls. So the read gets
+`IDENTITY_READ_BUDGET_MS` (1.2s) and then reports "the page was too busy to say
+which account is signed in" — a distinct message, because a slow page is not a
+network that moved its markup, and saying the wrong one sends the next person
+hunting a selector that is fine.
+
+Only the *handle* is cached (`publisher/identity-cache.ts`), for 30s, and
+4s when the read failed — a miss usually means the page had not finished
+arriving, and holding that answer would turn a passing miss into a lasting
+"unknown". **`authenticated` and `accountId` are never cached**: they come from
+the cookie jar, cost nothing, and a stale "signed in" is precisely the lie this
+shell exists to avoid.
+
+The safety rule is the binding, not the clock. Every entry is bound to the
+account id the cookies reported when it was stored, and a mismatch drops it
+before its age is even considered — so a cached handle cannot outlive the
+account it names. Networks with no id cookie (Bluesky, Mastodon) have nothing
+to bind to, which is why the TTL is seconds. Opening a sign-in tab invalidates
+the entry, since whoever is signed in may not be in a moment.
+
 **Never read `workspace.accountHandle` for this.** That field is a label the
 operator typed once. It was previously returned by `sessionStatus` and printed
 as "Signed in as @…", which meant a workspace carrying a handle from an old

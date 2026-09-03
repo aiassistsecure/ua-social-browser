@@ -117,6 +117,7 @@ async function bootstrap(): Promise<void> {
   const publisher = createPublisher({
     directory,
     ledger,
+    dataDir: config.dataDir,
     tabs: {
       async openOrFocus(workspaceId: string, url: string) {
         if (!shellWindow) {

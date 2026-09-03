@@ -1,4 +1,5 @@
 import { readBrowserState } from "./browser-store";
+import type { MediaRef } from "./media-store";
 
 /**
  * The stored copy of a draft — the only version of a post that may be sent.
@@ -19,7 +20,44 @@ export type StoredDraft = {
   scheduledFor: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
+  /** References only. The bytes are on disk; see `media-store.ts`. */
+  media: MediaRef[];
 };
+
+/**
+ * Reads attachments off a stored draft without trusting their shape.
+ *
+ * A malformed entry is dropped rather than repaired: half a reference cannot
+ * identify a file, and a publish that silently posted fewer pictures than were
+ * approved would be a quieter version of posting the wrong thing.
+ */
+function asMediaRefs(value: unknown): MediaRef[] {
+  if (!Array.isArray(value)) return [];
+  const refs: MediaRef[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry as Record<string, unknown>;
+    if (
+      typeof item.id !== "string" ||
+      typeof item.sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(item.sha256) ||
+      typeof item.filename !== "string" ||
+      typeof item.mimeType !== "string" ||
+      typeof item.bytes !== "number"
+    ) {
+      continue;
+    }
+    refs.push({
+      id: item.id,
+      sha256: item.sha256,
+      filename: item.filename,
+      mimeType: item.mimeType,
+      bytes: item.bytes,
+      ...(typeof item.altText === "string" ? { altText: item.altText } : {}),
+    });
+  }
+  return refs;
+}
 
 export function asStoredDraft(value: unknown): StoredDraft | null {
   if (!value || typeof value !== "object") return null;
@@ -37,6 +75,7 @@ export function asStoredDraft(value: unknown): StoredDraft | null {
       typeof draft.scheduledFor === "string" ? draft.scheduledFor : null,
     approvedBy: typeof draft.approvedBy === "string" ? draft.approvedBy : null,
     approvedAt: typeof draft.approvedAt === "string" ? draft.approvedAt : null,
+    media: asMediaRefs(draft.media),
   };
 }
 

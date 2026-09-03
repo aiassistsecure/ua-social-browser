@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Approval } from './approval';
+import type { MediaRef } from './mediaRef';
 import type { PublishRequestPlatform } from './publishRequestPlatform';
 
 export interface PublishRequest {
@@ -18,5 +19,7 @@ export interface PublishRequest {
      */
   body: string;
   approval: Approval;
+  /** @maxItems 10 */
+  media?: MediaRef[];
   idempotencyKey?: string;
 }

@@ -114,7 +114,9 @@ Adding one means: an entry in the platform registry, an adapter in the shell, th
 What the shell can *drive* differs by network, and it says which rather than answering everything with a shrug:
 
 - **Driven end to end** — X (its own bespoke adapter, verified with a real post on a real account on 2026-09-02), LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr. The shell opens the composer inside the workspace's own session, types the approved text, submits, and waits for the network's own confirmation.
-- **Refused, with the actual reason** — Instagram, TikTok, YouTube and Pinterest want an image or video, and an approved draft carries text; Reddit needs a community and a title the draft model does not have. Those answer with that specific reason and a link to post in the tab. The draft stays approved either way.
+- **Refused, with the actual reason** — Instagram, TikTok, YouTube and Pinterest post through a multi-step upload flow this build does not drive, and offer no text-only route; Reddit needs a community and a title the draft model does not have. Those answer with that specific reason and a link to post in the tab. The draft stays approved either way.
+
+Posts can carry images and video on the driven networks. The file is stored under the data directory, addressed by the hash of its own contents, and the draft carries only a reference — so the ledger never swells by the size of a photo. That hash is also what the shell re-checks immediately before uploading: an approval is for exact content, and content includes the picture.
 
 ## Signing in (FaceMask)
 

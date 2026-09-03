@@ -29,6 +29,7 @@ import type { WebContents } from "electron";
 import type { PublishOutcome } from "../session-bridge-server";
 import { runInPage } from "./page";
 import type { IdentityConfig } from "./identity";
+import { setFileInput } from "./upload";
 import { unconfirmedOutcome } from "../idempotency";
 import { composerPage, runComposeFlow, type ComposerConfig } from "./compose-driver";
 
@@ -39,6 +40,12 @@ export type SessionDetection =
 export type SubmitContext = {
   contents: WebContents;
   body: string;
+  /**
+   * Absolute paths to the approved attachments, in posting order. Already
+   * checked against the approval's hashes by the caller — an adapter uploads
+   * them, it does not decide whether they are allowed.
+   */
+  media: string[];
   /** Absolute epoch ms; the API server's bridge call times out at 20s. */
   deadline: number;
 };
@@ -77,7 +84,7 @@ export type PlatformAdapter = {
  * know which they have.
  */
 function cannotPost(label: string, reason: string) {
-  return async (): Promise<PublishOutcome> => ({
+  return async (_context: SubmitContext): Promise<PublishOutcome> => ({
     kind: "rejected",
     detail:
       `${label}: ${reason} Open the workspace tab and post from your signed-in session there; ` +
@@ -92,6 +99,9 @@ function driven(label: string, config: ComposerConfig) {
     runComposeFlow(composerPage(context.contents, config), {
       label,
       body: context.body,
+      media: context.media,
+      canAttach: config.fileInput !== undefined,
+      reportsMediaReady: config.mediaAttached !== undefined,
       deadline: context.deadline,
       allowHotkey: config.submitHotkey === true,
       hasOpener: config.opener !== undefined,
@@ -109,6 +119,9 @@ const X_SELECTORS = {
   submit: '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]',
   toast: '[data-testid="toast"]',
   loginField: 'input[autocomplete="username"], [data-testid="loginButton"]',
+  fileInput: '[data-testid="fileInput"], input[type="file"][accept*="image"]',
+  /** The attachment's own remove button: present only once it has landed. */
+  attached: '[data-testid="attachments"] [data-testid="removeMedia"], [data-testid="attachments"] img',
 };
 
 type ProbeResult = "composer" | "login" | "waiting";
@@ -175,6 +188,35 @@ async function xSubmit(context: SubmitContext): Promise<PublishOutcome> {
       kind: "rejected",
       detail: `Could not enter the post text on X. ${typed.detail ?? ""}`.trim(),
     };
+  }
+
+  // 2b. Attach the files and wait for X to finish taking them. X keeps its
+  //     post button live while an upload is still going, so pressing it early
+  //     posts the words on their own.
+  if (context.media.length > 0) {
+    const attached = await setFileInput(contents, X_SELECTORS.fileInput, context.media);
+    if (!attached.ok) {
+      return {
+        kind: "rejected",
+        detail: `Could not attach the file on X. ${attached.detail}`,
+      };
+    }
+
+    let ready = false;
+    while (Date.now() < deadline && !ready) {
+      ready = await runInPage<boolean>(
+        contents,
+        (selectors: typeof X_SELECTORS) => !!document.querySelector(selectors.attached),
+        X_SELECTORS,
+      );
+      if (!ready) await sleep(250);
+    }
+    if (!ready) {
+      return {
+        kind: "rejected",
+        detail: "X never finished taking the attachment, so nothing was submitted.",
+      };
+    }
   }
 
   // 3. Submit once the button is live.
@@ -274,6 +316,8 @@ const COMPOSERS: Record<string, ComposerConfig> = {
     editorKind: "contenteditable",
     submit:
       'button.share-actions__primary-action, button[aria-label="Post"], div[role="dialog"] button.artdeco-button--primary',
+    fileInput: 'input[type="file"][accept*="image"], .share-box input[type="file"]',
+    mediaAttached: '.share-images, .image-selector, [data-test-id="media-preview"]',
     login: { selectors: 'input[name="session_key"]', pathPattern: "^/(login|uas/login|checkpoint)" },
     confirmation: {
       toast: '[data-test-artdeco-toast-item], .artdeco-toast-item__message',
@@ -289,6 +333,8 @@ const COMPOSERS: Record<string, ComposerConfig> = {
     editorKind: "contenteditable",
     submit:
       'div[role="dialog"] div[role="button"][aria-label="Post"], div[role="dialog"] button[type="submit"]',
+    fileInput: 'div[role="dialog"] input[type="file"]',
+    mediaAttached: 'div[role="dialog"] img[src^="blob:"], div[role="dialog"] [aria-label*="Remove"]',
     login: { selectors: 'input[name="pass"]', pathPattern: "^/(login|checkpoint)" },
     confirmation: {
       errorText: "went wrong|couldn't|could not|failed|try again",
@@ -300,6 +346,8 @@ const COMPOSERS: Record<string, ComposerConfig> = {
     editor: 'div[contenteditable="true"][role="textbox"], div[data-lexical-editor="true"]',
     editorKind: "contenteditable",
     submit: 'div[role="button"][aria-label="Post"], div[role="dialog"] div[role="button"]:not([aria-disabled="true"])',
+    fileInput: 'input[type="file"][accept*="image"]',
+    mediaAttached: 'img[src^="blob:"], [aria-label*="Remove"]',
     // Threads posts on Ctrl/Cmd+Enter, which is steadier than its button.
     submitHotkey: true,
     login: { selectors: 'input[name="username"]', pathPattern: "^/login" },
@@ -312,6 +360,8 @@ const COMPOSERS: Record<string, ComposerConfig> = {
     editor: '[data-testid="composerTextInput"], div[contenteditable="true"][role="textbox"]',
     editorKind: "contenteditable",
     submit: '[data-testid="composerPublishBtn"]',
+    fileInput: 'input[type="file"][accept*="image"]',
+    mediaAttached: '[data-testid="images"] img, img[src^="blob:"]',
     submitHotkey: true,
     login: { selectors: '[data-testid="loginUsernameInput"], [data-testid="signInButton"]' },
     confirmation: {
@@ -324,6 +374,8 @@ const COMPOSERS: Record<string, ComposerConfig> = {
     editor: 'textarea.autosuggest-textarea__textarea, textarea#compose-textarea, .compose-form textarea',
     editorKind: "textarea",
     submit: 'button.compose-form__submit, .compose-form button[type="submit"]',
+    fileInput: '.compose-form input[type="file"]',
+    mediaAttached: '.compose-form__upload-thumbnail, .compose-form .media-gallery',
     submitHotkey: true,
     login: { pathPattern: "^/auth/sign_in" },
     confirmation: {
@@ -334,6 +386,8 @@ const COMPOSERS: Record<string, ComposerConfig> = {
     editor: 'div[contenteditable="true"][role="textbox"], .post-form--content [contenteditable="true"]',
     editorKind: "contenteditable",
     submit: 'button[aria-label="Post"], [data-testid="postFormButton"], .post-form--footer button.blue',
+    fileInput: 'input[type="file"][accept*="image"]',
+    mediaAttached: 'img[src^="blob:"], .post-form--content img',
     login: { pathPattern: "^/login" },
     confirmation: {
       errorText: "went wrong|couldn't|could not|failed|try again",
@@ -342,9 +396,18 @@ const COMPOSERS: Record<string, ComposerConfig> = {
   },
 };
 
-/** Networks that take a picture or a video, not a paragraph. */
+/**
+ * Networks that take a picture or a video, not a paragraph.
+ *
+ * A draft can carry an image now, so the old reason — "a draft carries text" —
+ * stopped being true the moment attachments shipped. What is still true is
+ * that none of these post through a single composer: each is a multi-step
+ * flow (choose, crop, filter, describe, share) that the shared driver cannot
+ * express, and none has been built. Saying so is the difference between a
+ * limit an operator can wait out and one they cannot.
+ */
 const MEDIA_REQUIRED =
-  "a post here needs an image or a video, and a draft carries text. Nothing this build could click would change that.";
+  "posting here is a multi-step upload flow that this build does not drive yet, and a post needs an image or video, so there is no text-only route either.";
 
 const ADAPTERS: PlatformAdapter[] = [
   {

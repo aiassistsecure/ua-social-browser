@@ -114,6 +114,7 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
           workspaceId: workspace.id,
           platform: workspace.platform,
           body,
+          media: [],
           status: 'draft',
           scheduledFor: null,
           approvedBy: null,

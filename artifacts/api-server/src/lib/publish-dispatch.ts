@@ -5,7 +5,8 @@ import {
   type DispatchRecord,
   type DispatchSource,
 } from "./dispatch-log";
-import { publishThroughSession } from "./session-bridge";
+import { resolveMedia, type MediaRef } from "./media-store";
+import { publishThroughSession, type BridgePublishInput } from "./session-bridge";
 
 /**
  * The single door a post leaves through.
@@ -22,6 +23,8 @@ export type DispatchRequest = {
   draftId: string;
   platform: string;
   body: string;
+  /** Attachments as recorded on the approved draft, in posting order. */
+  media?: MediaRef[];
   approval: { approvedBy: string; approvedAt: string };
   source: DispatchSource;
   /** Set by the scheduler: the send time this attempt is being made for. */
@@ -65,6 +68,44 @@ export function idempotencyKeyFor(draftId: string, approvedAt: string): string {
 /** In-process coalescing, so a scheduler tick and a button press cannot both post. */
 const inFlight = new Map<string, Promise<DispatchOutcome>>();
 
+type ResolvedAttachments =
+  | { ok: true; media: NonNullable<BridgePublishInput["media"]> }
+  | { ok: false; detail: string };
+
+/**
+ * Turns stored references into the paths the shell will upload.
+ *
+ * A missing file fails the whole dispatch rather than posting what is left. A
+ * post with one of its three pictures silently dropped is a different post
+ * from the one that was approved, and the operator would have no way to know
+ * from the result that anything was missing.
+ */
+function resolveAttachments(
+  tenantId: string,
+  media: readonly MediaRef[] | undefined,
+): ResolvedAttachments {
+  if (!media || media.length === 0) return { ok: true, media: [] };
+
+  const resolved: NonNullable<BridgePublishInput["media"]> = [];
+  for (const ref of media) {
+    const stored = resolveMedia(tenantId, ref.id);
+    if (!stored || stored.sha256 !== ref.sha256) {
+      return {
+        ok: false,
+        detail: `The attachment "${ref.filename}" is missing from this app's storage, so nothing was posted. Re-attach it and approve again.`,
+      };
+    }
+    resolved.push({
+      path: stored.path,
+      sha256: stored.sha256,
+      filename: stored.filename,
+      mimeType: stored.mimeType,
+      ...(ref.altText ? { altText: ref.altText } : {}),
+    });
+  }
+  return { ok: true, media: resolved };
+}
+
 /** Replays an already-published dispatch without touching the network again. */
 function replayPublished(record: DispatchRecord): DispatchOutcome {
   return {
@@ -84,6 +125,21 @@ async function performDispatch(
   idempotencyKey: string,
 ): Promise<DispatchOutcome> {
   const attemptedAt = new Date().toISOString();
+
+  // Resolved before the intent is written: a dispatch that cannot assemble its
+  // own attachments never happened, and should not leave a "sending" record
+  // for a post that was never handed to anything.
+  const attachments = resolveAttachments(request.tenantId, request.media);
+  if (!attachments.ok) {
+    return {
+      status: "failed",
+      reason: "rejected",
+      message: attachments.detail,
+      attemptedAt,
+      idempotencyKey,
+      replayed: false,
+    };
+  }
 
   // Written down before the call, not after. A post cannot be recalled, so the
   // dangerous state is having sent one with nothing on disk saying so: the
@@ -110,6 +166,7 @@ async function performDispatch(
     draftId: request.draftId,
     platform: request.platform,
     body: request.body,
+    media: attachments.media,
     idempotencyKey,
   });
 

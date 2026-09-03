@@ -41,7 +41,20 @@ export const BRIDGE_TOKEN_HEADER = "x-ua-shell-token";
 
 export type SessionSnapshot = {
   authenticated: boolean;
+  /**
+   * The signed-in handle, read from the network's own signed-in page.
+   *
+   * Present only when it was actually read. It is never the workspace's
+   * configured label — a stored string presented as the signed-in account is a
+   * claim about someone's account that nothing checked.
+   */
   accountHandle?: string;
+  /** Stable account id from the partition's cookies. Proof, but not a name. */
+  accountId?: string;
+  /** Always `"session"` when a handle is present, so a caller cannot assume. */
+  handleSource?: "session";
+  /** Why the handle is absent, in words meant for the operator. */
+  handleUnknown?: string;
   detail: string;
 };
 

@@ -124,6 +124,11 @@ async function bootstrap(): Promise<void> {
         }
         await shellWindow.openOrFocusTab(workspaceId, url);
       },
+      // Reading who is signed in needs a page that already is. There may not
+      // be one, and that is answered as unknown rather than guessed.
+      liveContents(workspaceId: string) {
+        return shellWindow?.liveContentsFor(workspaceId) ?? null;
+      },
     },
   });
 
@@ -252,6 +257,9 @@ function registerBridgeIpc(
   sessionStatus: (workspaceId: string) => Promise<{
     authenticated: boolean;
     accountHandle?: string;
+    accountId?: string;
+    handleSource?: "session";
+    handleUnknown?: string;
     detail: string;
   }>,
 ): void {

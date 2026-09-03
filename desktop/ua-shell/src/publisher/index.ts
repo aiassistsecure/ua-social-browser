@@ -25,6 +25,8 @@ import { unconfirmedOutcome } from "../idempotency";
 import type { WorkspaceDirectory, WorkspaceEntry } from "../workspace-directory";
 import { applyEmulation, contextFor, detachEmulation, identityFrom } from "../workspace-contexts";
 import { adapterFor, type PlatformAdapter } from "./adapters";
+import { resolveIdentity } from "./identity";
+import { runInPage } from "./page";
 import { createLogger, errorFields } from "../logger";
 
 const log = createLogger("publisher");
@@ -58,6 +60,19 @@ function identityForEntry(entry: WorkspaceEntry) {
  */
 export type WorkspaceTabs = {
   openOrFocus(workspaceId: string, url: string): Promise<void>;
+  /**
+   * A live signed-in page for this workspace, when one is loaded.
+   *
+   * Used to read *which* account is signed in. Returning `null` is a normal
+   * answer — the operator may not have the network view open — and produces an
+   * honest "unknown" rather than a fallback to anything stored.
+   */
+  liveContents?(workspaceId: string): WebContentsLike | null;
+};
+
+/** The slice of Electron's `WebContents` this needs, kept narrow for testing. */
+export type WebContentsLike = {
+  executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
 };
 
 export function createPublisher(deps: {
@@ -96,6 +111,71 @@ export function createPublisher(deps: {
     };
   }
 
+  /**
+   * Reads the account behind a workspace's session.
+   *
+   * Cookies come from the partition itself; the handle comes from whatever
+   * signed-in page of that network is already open, so nothing extra is
+   * fetched and no private API is called. A failure anywhere here is reported
+   * as unknown — never as a name.
+   */
+  async function whoIsSignedIn(entry: WorkspaceEntry, adapter: PlatformAdapter) {
+    const context = contextFor(identityForEntry(entry));
+
+    return resolveIdentity(adapter.identity, {
+      async cookie(name: string) {
+        const cookies = await context.cookies.get({ url: adapter.origin, name });
+        return cookies[0]?.value;
+      },
+
+      async pageText(selectors: string[]) {
+        const contents = tabs.liveContents?.(entry.id) ?? null;
+        if (!contents) return null;
+
+        try {
+          // Text plus the attributes that carry a name in practice. Read-only,
+          // and scoped to the first element any selector matches — a page is
+          // full of other people's handles.
+          return await runInPage<string | null>(
+            contents as never,
+            (input: { selectors: string[] }) => {
+              for (const selector of input.selectors) {
+                let element: Element | null = null;
+                try {
+                  element = document.querySelector(selector);
+                } catch {
+                  // An unsupported selector (`:has()` on an old engine) is
+                  // skipped rather than aborting the whole read.
+                  continue;
+                }
+                if (!element) continue;
+                const parts = [
+                  element.textContent ?? "",
+                  element.getAttribute("aria-label") ?? "",
+                  element.getAttribute("alt") ?? "",
+                  element.getAttribute("title") ?? "",
+                  element.getAttribute("href") ?? "",
+                ];
+                const nested = element.querySelector("img");
+                if (nested) parts.push(nested.getAttribute("alt") ?? "");
+                return parts.join(" ").trim();
+              }
+              return "";
+            },
+            { selectors },
+          );
+        } catch (error) {
+          log.warn("Could not read the signed-in account from the page", {
+            workspaceId: entry.id,
+            ...errorFields(error),
+          });
+          // A page that cannot be read is not a page that named an account.
+          return "";
+        }
+      },
+    });
+  }
+
   async function sessionStatus(
     workspaceId: string,
     platform?: string,
@@ -122,12 +202,19 @@ export function createPublisher(deps: {
 
     try {
       const result = await signedIn(entry, adapter);
+
+      // Who is signed in is derived from the session or not reported at all.
+      // `entry.accountHandle` is a label the operator typed once and is
+      // deliberately not consulted: presenting it as the signed-in account is
+      // how this shell came to tell its owner he was posting from an account
+      // that had never existed.
+      const identity = result.authenticated
+        ? await whoIsSignedIn(entry, adapter)
+        : {};
+
       return {
         authenticated: result.authenticated,
-        // The configured handle is only reported once a session actually
-        // exists, and it is still the workspace's *configured* account rather
-        // than a verified one — so it is never presented on its own.
-        accountHandle: result.authenticated ? (entry.accountHandle ?? undefined) : undefined,
+        ...identity,
         detail: result.detail,
       };
     } catch (error) {

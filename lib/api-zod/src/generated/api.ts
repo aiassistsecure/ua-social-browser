@@ -30,7 +30,10 @@ export const GetSessionStatusResponse = zod.object({
   "workspaceId": zod.string(),
   "bridgeAvailable": zod.boolean().describe('True when the native browser session bridge is reachable'),
   "authenticated": zod.boolean().describe('True when the workspace session is signed in to the platform'),
-  "accountHandle": zod.string().optional(),
+  "accountHandle": zod.string().optional().describe('The signed-in handle, read from the network\'s own signed-in page in this workspace\'s session. Absent when it could not be read — it is never the workspace\'s stored label, because presenting a stored string as the signed-in account is a claim nothing verified.'),
+  "accountId": zod.string().optional().describe('Stable account id from the partition\'s own cookies. Proof of which account holds this session, but not a name.'),
+  "handleSource": zod.enum(['session']).optional().describe('Present only alongside accountHandle, and only ever \"session\", so a caller cannot mistake an absent handle for a stored one.'),
+  "handleUnknown": zod.string().optional().describe('Why the handle is absent, phrased for the operator.'),
   "detail": zod.string()
 })
 

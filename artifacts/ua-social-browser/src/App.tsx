@@ -195,6 +195,29 @@ export default function App() {
     document.documentElement.classList.add('dark');
   }, []);
 
+  /**
+   * Swallow file drops that miss their target.
+   *
+   * The default action for a file dropped on a page is to navigate to it. This
+   * page is the privileged UI origin — the one view holding `window.uaShell` —
+   * so a near miss while attaching a photo would replace the whole app with an
+   * image viewer and there is no way back to it from there. Cards that accept
+   * a drop call `preventDefault` themselves; this catches everything else and
+   * does nothing, which is the correct outcome for a missed drop.
+   */
+  useEffect(() => {
+    const swallow = (event: DragEvent) => {
+      if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return;
+      event.preventDefault();
+    };
+    window.addEventListener('dragover', swallow);
+    window.addEventListener('drop', swallow);
+    return () => {
+      window.removeEventListener('dragover', swallow);
+      window.removeEventListener('drop', swallow);
+    };
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={200}>

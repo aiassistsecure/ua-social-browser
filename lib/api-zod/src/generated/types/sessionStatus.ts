@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SessionStatusHandleSource } from './sessionStatusHandleSource';
 
 export interface SessionStatus {
   workspaceId: string;
@@ -12,6 +13,13 @@ export interface SessionStatus {
   bridgeAvailable: boolean;
   /** True when the workspace session is signed in to the platform */
   authenticated: boolean;
+  /** The signed-in handle, read from the network's own signed-in page in this workspace's session. Absent when it could not be read — it is never the workspace's stored label, because presenting a stored string as the signed-in account is a claim nothing verified. */
   accountHandle?: string;
+  /** Stable account id from the partition's own cookies. Proof of which account holds this session, but not a name. */
+  accountId?: string;
+  /** Present only alongside accountHandle, and only ever "session", so a caller cannot mistake an absent handle for a stored one. */
+  handleSource?: SessionStatusHandleSource;
+  /** Why the handle is absent, phrased for the operator. */
+  handleUnknown?: string;
   detail: string;
 }

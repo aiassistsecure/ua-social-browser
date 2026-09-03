@@ -418,7 +418,7 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
                 id="account-name"
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="Northstar Studio"
+                placeholder="Display name"
                 data-testid="input-account-name"
               />
             </div>
@@ -428,7 +428,7 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
                 id="account-handle"
                 value={handle}
                 onChange={(event) => setHandle(event.target.value)}
-                placeholder="@northstar.studio"
+                placeholder="@handle"
                 data-testid="input-account-handle"
               />
             </div>

@@ -28,6 +28,7 @@
 import type { WebContents } from "electron";
 import type { PublishOutcome } from "../session-bridge-server";
 import { runInPage } from "./page";
+import type { IdentityConfig } from "./identity";
 import { unconfirmedOutcome } from "../idempotency";
 import { composerPage, runComposeFlow, type ComposerConfig } from "./compose-driver";
 
@@ -55,6 +56,14 @@ export type PlatformAdapter = {
    */
   signInUrl: string;
   detection: SessionDetection;
+  /**
+   * How to find out *which* account is signed in.
+   *
+   * Absent means this shell cannot tell, and the operator is told that rather
+   * than shown a stored label. Every selector here is product knowledge and
+   * unverified, so a miss must read as unknown — never as the wrong name.
+   */
+  identity?: IdentityConfig;
   submit(context: SubmitContext): Promise<PublishOutcome>;
 };
 
@@ -345,6 +354,19 @@ const ADAPTERS: PlatformAdapter[] = [
     signInUrl: "https://x.com/i/flow/login",
     composeUrl: "https://x.com/compose/post",
     detection: { kind: "cookie", names: ["auth_token"] },
+    identity: {
+      // `twid` holds `u%3D<numeric id>` — proof of which account, without a name.
+      idCookie: { name: "twid", pattern: "u=(\\d+)" },
+      // The account switcher in the left nav names the signed-in account; its
+      // aria-label carries the handle even when the button collapses to an
+      // avatar on a narrow window.
+      handle: {
+        selectors: [
+          '[data-testid="SideNav_AccountSwitcher_Button"]',
+          '[data-testid="UserAvatar-Container-unknown"]',
+        ],
+      },
+    },
     submit: xSubmit,
   },
   {
@@ -354,6 +376,15 @@ const ADAPTERS: PlatformAdapter[] = [
     signInUrl: "https://www.instagram.com/accounts/login/",
     composeUrl: "https://www.instagram.com/create/style/",
     detection: { kind: "cookie", names: ["sessionid"] },
+    identity: {
+      idCookie: { name: "ds_user_id" },
+      // Instagram shows no `@` anywhere in its chrome; the profile link in the
+      // nav is `/<username>/`, and `pageText` includes href for this reason.
+      handle: {
+        selectors: ['nav a[href^="/"][role="link"]:has(img)', 'a[href^="/"][tabindex="0"]:has(img)'],
+        pattern: "/([A-Za-z0-9._]{1,30})/",
+      },
+    },
     submit: cannotPost("Instagram", MEDIA_REQUIRED),
   },
   {
@@ -363,6 +394,9 @@ const ADAPTERS: PlatformAdapter[] = [
     signInUrl: "https://www.facebook.com/login",
     composeUrl: "https://www.facebook.com/",
     detection: { kind: "cookie", names: ["c_user"] },
+    // `c_user` is the account id. Facebook does not show a handle in its
+    // chrome and profile links are numeric, so the id is the whole answer.
+    identity: { idCookie: { name: "c_user" } },
     submit: driven("Facebook", COMPOSERS.facebook!),
   },
   {
@@ -372,6 +406,13 @@ const ADAPTERS: PlatformAdapter[] = [
     signInUrl: "https://www.threads.net/login",
     composeUrl: "https://www.threads.net/",
     detection: { kind: "cookie", names: ["sessionid"] },
+    identity: {
+      idCookie: { name: "ds_user_id" },
+      handle: {
+        selectors: ['a[href^="/@"]'],
+        pattern: "/@([A-Za-z0-9._]{1,30})",
+      },
+    },
     submit: driven("Threads", COMPOSERS.threads!),
   },
   {
@@ -393,6 +434,14 @@ const ADAPTERS: PlatformAdapter[] = [
       kind: "unsupported",
       reason: "Bluesky keeps its session in local storage, which a cookie check cannot see.",
     },
+    identity: {
+      // No cookie to read, but the signed-in profile link carries the handle,
+      // which is also the one thing a cookie check could never tell us here.
+      handle: {
+        selectors: ['[data-testid="profileCardHeaderDisplayName"]', 'a[href^="/profile/"]'],
+        pattern: "/profile/([A-Za-z0-9._-]{1,64})",
+      },
+    },
     submit: driven("Bluesky", COMPOSERS.bluesky!),
   },
   {
@@ -404,6 +453,12 @@ const ADAPTERS: PlatformAdapter[] = [
     detection: {
       kind: "unsupported",
       reason: "Mastodon sessions belong to whichever instance the workspace uses, not to one fixed origin.",
+    },
+    identity: {
+      // Mastodon prints the full `@user@instance` in its own navigation bar.
+      handle: {
+        selectors: [".navigation-bar__profile-account", ".account__header__tabs__name small"],
+      },
     },
     submit: driven("Mastodon", COMPOSERS.mastodon!),
   },
@@ -453,6 +508,13 @@ const ADAPTERS: PlatformAdapter[] = [
     signInUrl: "https://www.tumblr.com/login",
     composeUrl: "https://www.tumblr.com/new/text",
     detection: { kind: "cookie", names: ["logged_in"] },
+    // `logged_in=1` says a session exists and nothing about whose it is.
+    identity: {
+      handle: {
+        selectors: ['[data-testid="controlMenuUserAvatar"]', 'a[href^="https://www.tumblr.com/blog/"]'],
+        pattern: "/blog/([A-Za-z0-9._-]{1,64})",
+      },
+    },
     submit: driven("Tumblr", COMPOSERS.tumblr!),
   },
 ];

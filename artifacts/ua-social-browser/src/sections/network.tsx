@@ -263,11 +263,18 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
           <ShieldX className="h-4 w-4 shrink-0 text-chart-3" />
         )}
         <div className="min-w-0 flex-1">
-          <p className="font-medium">
+          <p className="font-medium" data-testid="session-headline">
             {sessionQuery.isLoading
               ? 'Checking the workspace session'
               : sessionReady
-                ? `Signed in${session?.accountHandle ? ` as ${session.accountHandle}` : ''}`
+                ? // The handle is named only when the shell read it off the
+                  // network's own signed-in page. Anything else — including a
+                  // handle stored on this workspace — is not evidence about
+                  // whose account this is, and naming it would answer the one
+                  // question the operator must never be misled about.
+                  session?.accountHandle && session.handleSource === 'session'
+                  ? `Signed in as ${session.accountHandle}`
+                  : 'Signed in'
                 : awaitingSignIn
                   ? 'Waiting for the sign-in to finish in the tab'
                   : 'Not ready to post'}
@@ -278,6 +285,18 @@ export function Network({ state, updateState, workspace, profile }: SectionProps
               : (session?.detail ??
                 'Session state is resolved by the desktop shell.')}
           </p>
+          {sessionReady && !session?.accountHandle ? (
+            <p
+              className="mt-0.5 text-xs text-chart-4"
+              data-testid="session-account-unknown"
+            >
+              {session?.handleUnknown ??
+                'Which account this is could not be read from the session.'}
+              {session?.accountId
+                ? ` This session belongs to account ${session.accountId}.`
+                : ''}
+            </p>
+          ) : null}
         </div>
         <span className="shrink-0 text-xs text-muted-foreground">
           {profile?.name ?? 'No UA profile'}

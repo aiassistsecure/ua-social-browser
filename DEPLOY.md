@@ -392,6 +392,14 @@ separately with `GET /api/session/status?workspaceId=…&platform=…`. A sessio
 one network is no evidence about another, so a badge is never drawn from a
 sibling's session.
 
+`GET /api/session/status` also answers *which* account, when it can. The
+`accountId` comes from the partition's cookies; `accountHandle` is read from a
+live signed-in page for that workspace and arrives with
+`handleSource: "session"`. When the handle cannot be read, `handleUnknown`
+explains why and the UI shows that instead of a name. The workspace's stored
+`accountHandle` label is never used for this — a stored string presented as the
+signed-in account is a claim nothing verified.
+
 `opened: true` means a login page is now in front of the operator. Whether they
 finished — a human sign-in takes minutes and often a second factor — is answered
 only by `GET /api/session/status` reading the session back, which is what the

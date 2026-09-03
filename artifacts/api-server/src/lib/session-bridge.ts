@@ -20,7 +20,13 @@ export type BridgeStatus = {
   workspaceId: string;
   bridgeAvailable: boolean;
   authenticated: boolean;
+  /** Read from the network's signed-in page by the shell. Never a stored label. */
   accountHandle?: string;
+  /** Stable account id from the partition's cookies: proof, but not a name. */
+  accountId?: string;
+  handleSource?: "session";
+  /** Why the handle is absent, phrased for the operator. */
+  handleUnknown?: string;
   detail: string;
 };
 
@@ -138,6 +144,9 @@ export async function readSessionStatus(
     const data = (payload ?? {}) as {
       authenticated?: boolean;
       accountHandle?: string;
+      accountId?: string;
+      handleSource?: "session";
+      handleUnknown?: string;
       detail?: string;
     };
 
@@ -145,7 +154,12 @@ export async function readSessionStatus(
       workspaceId,
       bridgeAvailable: true,
       authenticated: Boolean(data.authenticated),
+      // Passed through exactly as the shell reported it. This layer must not
+      // invent an identity, and has nothing to invent one from.
       accountHandle: data.accountHandle,
+      accountId: data.accountId,
+      handleSource: data.handleSource,
+      handleUnknown: data.handleUnknown,
       detail:
         data.detail ??
         (data.authenticated

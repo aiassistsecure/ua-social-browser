@@ -258,6 +258,31 @@ and each is a separate session that must be read on its own.
 `adapters.ts` carries a `signInUrl` per network; that is the only thing sign-in
 needs from an adapter.
 
+### Which account is signed in
+
+`sessionStatus` answers this from the session or not at all, in
+`publisher/identity.ts`:
+
+- **`accountId`** comes from the partition's own cookies where a network keeps
+  one there (X `twid`, Instagram/Threads `ds_user_id`, Facebook `c_user`).
+  Proof of which account holds the session, available without loading anything
+  — but a number, not a name.
+- **`accountHandle`** is read off a live signed-in page for that workspace,
+  found by `ShellWindow.liveContentsFor` (the embedded network view first, then
+  a tab). No extra request, no private API, no bearer token. It arrives with
+  `handleSource: "session"`, and the UI names an account only when that field
+  is present.
+- Anything unreadable is `handleUnknown` — a sentence for the operator, not a
+  fallback.
+
+**`workspace.accountHandle` is not consulted, and must not be.** It is a label
+typed once and stored; presenting it as the signed-in account is how this shell
+told its owner he was posting from `@northstarhq`, an account that had never
+existed, while a different account was signed in. A wrong name beside a green
+tick is worse than no name. The selectors that read handles are product
+knowledge and unverified like every other selector here, so a miss has to read
+as unknown.
+
 ---
 
 ## 9. Scheduling

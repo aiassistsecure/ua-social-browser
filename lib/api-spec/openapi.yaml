@@ -285,6 +285,25 @@ components:
           description: True when the workspace session is signed in to the platform
         accountHandle:
           type: string
+          description: >-
+            The signed-in handle, read from the network's own signed-in page in
+            this workspace's session. Absent when it could not be read — it is
+            never the workspace's stored label, because presenting a stored
+            string as the signed-in account is a claim nothing verified.
+        accountId:
+          type: string
+          description: >-
+            Stable account id from the partition's own cookies. Proof of which
+            account holds this session, but not a name.
+        handleSource:
+          type: string
+          enum: [session]
+          description: >-
+            Present only alongside accountHandle, and only ever "session", so a
+            caller cannot mistake an absent handle for a stored one.
+        handleUnknown:
+          type: string
+          description: Why the handle is absent, phrased for the operator.
         detail:
           type: string
     SignInRequest:

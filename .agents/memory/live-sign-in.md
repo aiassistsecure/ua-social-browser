@@ -44,3 +44,25 @@ identity, and a session on one is no evidence at all about another.
 draw one account's badge from a sibling's session. A registry row that the
 operator can toggle "linked" by hand is the same lie in slower motion — any
 control that sets that flag without a session read has to go.
+
+## Which account, not just whether
+
+An opened tab is not evidence of an account, and neither is a stored label.
+
+`sessionStatus` reports `accountId` from the partition's cookies (X `twid`,
+Instagram/Threads `ds_user_id`, Facebook `c_user`) and `accountHandle` read
+from a live signed-in page for that workspace — `ShellWindow.liveContentsFor`
+returns the embedded network view if it is loaded, otherwise a tab. The handle
+carries `handleSource: "session"`, and the UI names an account only when that
+field is set. Everything else is `handleUnknown`, shown verbatim.
+
+**Never read `workspace.accountHandle` for this.** That field is a label the
+operator typed once. It was previously returned by `sessionStatus` and printed
+as "Signed in as @…", which meant a workspace carrying a handle from an old
+seed told the owner he was posting from `@northstarhq` — an account that never
+existed — while a real, different account was signed in. The pure logic in
+`publisher/identity.ts` is covered by tests including one asserting that no
+input path can produce a handle from anything but a page read.
+
+The handle selectors are product knowledge and unverified. A miss must be
+"unknown", never a wrong name — that is the whole point.

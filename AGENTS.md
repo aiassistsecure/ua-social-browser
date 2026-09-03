@@ -356,6 +356,13 @@ treat it as proof the path works, not as coverage of every X UI state.
 adapters against real accounts (§7). No display exists in the Replit container,
 so nobody has watched them run.
 
+**A fresh install is empty.** `artifacts/ua-social-browser/src/data.ts` boots
+with no workspaces, drafts, accounts, or activity, and no approver name. The
+review queue refuses to approve until Settings › Approver name is filled, and
+the publish path sends the recorded approval verbatim or refuses — there is no
+`'Operator'` fallback. Approvals already recorded keep the name they were
+signed under; the ledger is not rewritten.
+
 **Dead until configured:** AI drafting needs `AIASSIST_API_KEY` (the legacy
 `AIAssIST_API_KEY` spelling still works with a deprecation warning). Without it
 `/api/ai/*` fails loudly.
@@ -379,6 +386,15 @@ multi-tenant auth layer.
   on macOS/Windows — where the shell is actually packaged — with
   `Cannot find module @rollup/rollup-darwin-x64`. They have been removed. If a
   template sync brings them back, remove them again.
+- **Seed data reached a real audience.** `data.ts` once shipped a fictional
+  operator ("Alex Morgan"), fictional accounts, and sample drafts so the UI
+  looked alive. The owner approved one of those sample drafts while the sample
+  name was still in Settings and published it from a real account, so the
+  ledger recorded a real post under a person who does not exist — and because
+  an approval is a snapshot of who signed at the time, renaming afterwards
+  could not fix it. The seed is gone and the approver name is required before
+  approval. Do not add "just a little" sample content back; invariant 10 is
+  not about aesthetics.
 - **`minimumReleaseAge: 1440`** in `pnpm-workspace.yaml` is a supply-chain
   guard. Leave it on; use the exclude list if something is genuinely urgent.
 - **`nedb-engine` stays external** in the api-server esbuild bundle — bundling

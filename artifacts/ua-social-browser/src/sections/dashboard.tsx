@@ -195,6 +195,12 @@ export function Dashboard({
           <CardTitle className="text-base">Recent activity</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col">
+          {state.activity.length === 0 ? (
+            <p className="py-3 text-sm text-muted-foreground">
+              Nothing has happened in this browser yet. Drafts, approvals, and
+              posts show up here as they occur.
+            </p>
+          ) : null}
           {state.activity.slice(0, 6).map((entry, index) => (
             <div key={entry.id}>
               {index > 0 ? <Separator /> : null}

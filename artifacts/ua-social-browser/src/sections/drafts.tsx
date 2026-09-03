@@ -31,6 +31,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { PlatformGlyph } from '@/components/app/platform-glyph';
 import { useToast } from '@/hooks/use-toast';
+import { approverName, recordedApproval } from '@/lib/approver';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { platformProfile } from '@/lib/platforms';
@@ -101,6 +102,7 @@ export function Drafts({
   state,
   updateState,
   workspace,
+  onNavigate,
   focusedDraftId,
   onFocusHandled,
 }: SectionProps & {
@@ -114,9 +116,15 @@ export function Drafts({
   const [sendingId, setSendingId] = useState<string | null>(null);
   const publishPost = usePublishPost();
 
-  const operator = state.settings.operatorName.trim() || 'Operator';
+  // Whoever is named here is who the ledger says signed. There is no fallback
+  // name: an approval recorded under a placeholder is a false statement about
+  // who agreed to publish, and the record cannot be corrected afterwards.
+  const operator = approverName(state.settings.operatorName);
   const drafts = draftsForWorkspace(state, workspace.id).filter((draft) =>
     matchesFilter(draft, filter),
+  );
+  const awaitingReview = drafts.some(
+    (draft) => draft.status === 'draft' || draft.status === 'failed',
   );
 
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
@@ -155,6 +163,15 @@ export function Drafts({
   }
 
   function approve(draft: Draft) {
+    if (operator === null) {
+      toast({
+        title: 'Say who is approving',
+        description:
+          'Approvals are recorded under your name. Add it under Settings › Approver name, then approve.',
+        variant: 'destructive',
+      });
+      return;
+    }
     patchDraft(draft.id, {
       status: draft.scheduledFor ? 'scheduled' : 'approved',
       approvedBy: operator,
@@ -227,7 +244,7 @@ export function Drafts({
   }
 
   function requestPublish(draft: Draft) {
-    if (!draft.approvedAt) {
+    if (recordedApproval(draft) === null) {
       toast({
         title: 'Approval required',
         description: 'A person has to sign off before anything reaches the network.',
@@ -244,6 +261,18 @@ export function Drafts({
 
   async function send(draft: Draft) {
     setPendingPublish(null);
+    // The approval sent is the one a person recorded, verbatim. If half of it
+    // is missing the draft was never properly approved, and inventing the
+    // other half here would be the app signing on someone's behalf.
+    const approval = recordedApproval(draft);
+    if (approval === null) {
+      toast({
+        title: 'Approval required',
+        description: 'A person has to sign off before anything reaches the network.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setSendingId(draft.id);
     patchDraft(draft.id, { status: 'publishing', lastError: null });
 
@@ -254,10 +283,7 @@ export function Drafts({
           draftId: draft.id,
           platform: draft.platform as PublishRequestPlatform,
           body: draft.body,
-          approval: {
-            approvedBy: draft.approvedBy ?? operator,
-            approvedAt: draft.approvedAt ?? new Date().toISOString(),
-          },
+          approval,
           // No idempotency key: the server derives it from the stored draft and
           // its approval, and refuses a different one. Sending our own could
           // only ever disagree with the record and be refused.
@@ -327,10 +353,38 @@ export function Drafts({
         </div>
       }
     >
+      {operator === null && awaitingReview ? (
+        <Card
+          className="border-chart-4/50 bg-chart-4/10"
+          data-testid="notice-approver-missing"
+        >
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-chart-4" />
+              <span>
+                Nothing can be approved until the app knows who is approving.
+                Every sign-off is recorded under that name and sent with the
+                post.
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onNavigate('settings')}
+              data-testid="button-set-approver"
+            >
+              Set your approver name
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {drafts.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="p-10 text-center text-sm text-muted-foreground">
-            Nothing in this view yet.
+            {filter === 'all'
+              ? 'No posts in this workspace yet. Draft one in the AI Composer, or write your own on the Network page, and it lands here for review.'
+              : 'Nothing in this view yet.'}
           </CardContent>
         </Card>
       ) : (
@@ -496,7 +550,12 @@ export function Drafts({
                       {!approved && draft.status !== 'published' ? (
                         <Button
                           size="sm"
-                          disabled={overLimit || locked}
+                          disabled={overLimit || locked || operator === null}
+                          title={
+                            operator === null
+                              ? 'Set your approver name in Settings first'
+                              : undefined
+                          }
                           onClick={() => approve(draft)}
                           data-testid={`button-approve-${draft.id}`}
                         >
@@ -586,8 +645,8 @@ export function Drafts({
             </AlertDialogTitle>
             <AlertDialogDescription>
               This sends the post through your signed-in session in this
-              workspace, under {pendingPublish?.approvedBy ?? operator}'s
-              approval. It becomes public immediately.
+              workspace, under {pendingPublish?.approvedBy}'s approval. It
+              becomes public immediately.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

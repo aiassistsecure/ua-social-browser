@@ -55,3 +55,30 @@ weakest test in the flow and it is what both known phantom cases had in common
 — X's login bounce, and Facebook's dialog-scoped editor closing without a
 `stillComposingPath`. Prefer a positive signal: a toast, or a link to the post
 that was just created.
+
+## Correcting a record the operator can see is wrong
+
+A post that went out without confirmation is recorded `failed`. That was the
+honest answer and remains the right default — but the operator can look at the
+account, and until recently the app gave them no way to say what they found. A
+ledger that cannot be corrected by the person who can see the truth is not more
+honest than one that can; it is only wrong for longer.
+
+`attested` is that correction. The rules are in
+`artifacts/ua-social-browser/src/lib/attestation.ts` and are load-bearing:
+
+- **Never `published`.** `published` means the network confirmed it. `attested`
+  means a named person says so. The badge reads "Posted · your word", and the
+  card says who and denies that the network confirmed it.
+- **Only a `failed` draft.** There is nothing to correct until an attempt
+  exists and came back wrong. A `published` draft is refused outright — the
+  network's confirmation is stronger evidence and a weaker claim may not
+  replace it.
+- **Signed, with no fallback name**, exactly like an approval.
+- **`lastError` survives**, and the operator's link is stored on the
+  attestation rather than in `postUrl`, so what the shell saw and what the
+  person found stay separable.
+- **Retractable**, returning the record to `failed`. The append-only ledger
+  keeps the claim and its withdrawal both.
+- **Never publishable again.** `attested` is neither `approved` nor
+  `scheduled`, so no scheduler will look at it. The post already went out.

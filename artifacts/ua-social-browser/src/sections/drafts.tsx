@@ -34,6 +34,7 @@ import {
 import { PlatformGlyph } from '@/components/app/platform-glyph';
 import { useToast } from '@/hooks/use-toast';
 import { approverName, recordedApproval } from '@/lib/approver';
+import { attest, describeAttestation, isRefusal, retract } from '@/lib/attestation';
 import {
   MEDIA_ACCEPT_ATTRIBUTE,
   formatBytes,
@@ -72,6 +73,10 @@ const STATUS_STYLE: Record<DraftStatus, string> = {
   publishing: 'border-chart-3/50 text-chart-3',
   published: 'border-chart-2/50 text-chart-2',
   failed: 'border-destructive/50 text-destructive',
+  // Deliberately not the `published` green. The post is out, but on the
+  // operator's word rather than the network's, and the badge should not look
+  // like a confirmation.
+  attested: 'border-chart-4/50 text-chart-4',
 };
 
 const STATUS_LABEL: Record<DraftStatus, string> = {
@@ -81,6 +86,9 @@ const STATUS_LABEL: Record<DraftStatus, string> = {
   publishing: 'Posting',
   published: 'Posted',
   failed: 'Failed',
+  // Names the source of the claim. "Posted" on its own would be the exact
+  // conflation this status exists to prevent.
+  attested: 'Posted · your word',
 };
 
 function matchesFilter(draft: Draft, filter: Filter): boolean {
@@ -92,7 +100,10 @@ function matchesFilter(draft: Draft, filter: Filter): boolean {
     case 'approved':
       return draft.status === 'approved' || draft.status === 'scheduled';
     case 'published':
-      return draft.status === 'published';
+      // An attested post is a post, as far as the operator is concerned — this
+      // is where they will look for it. The badge on the card is what keeps the
+      // network's confirmation and the operator's word distinguishable.
+      return draft.status === 'published' || draft.status === 'attested';
   }
 }
 
@@ -133,6 +144,9 @@ export function Drafts({
    * time, so this cannot get out of step with itself.
    */
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  /** The failed post the operator is correcting, and the link they are giving. */
+  const [attesting, setAttesting] = useState<Draft | null>(null);
+  const [attestedUrl, setAttestedUrl] = useState('');
   const fileInputPrefix = useId();
   const publishPost = usePublishPost();
 
@@ -215,6 +229,60 @@ export function Drafts({
       approvedAt: null,
       scheduledFor: null,
     });
+  }
+
+  /**
+   * Records the operator's own account of a post the network never confirmed.
+   *
+   * The rules live in `lib/attestation.ts`; this only carries the answer into
+   * state and says plainly when the module refuses.
+   */
+  function confirmAttestation(draft: Draft) {
+    const result = attest({
+      draft,
+      by: operator,
+      at: new Date().toISOString(),
+      postUrl: attestedUrl,
+    });
+
+    if (isRefusal(result)) {
+      toast({
+        title: 'Not recorded',
+        description: result.refused,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    patchDraft(draft.id, result);
+    updateState((current) => ({
+      ...current,
+      activity: logActivity(current, {
+        type: 'draft',
+        title: 'Corrected by a human',
+        detail: `${platformProfile(draft.platform).label} · ${operator} confirmed it posted`,
+      }),
+    }));
+    setAttesting(null);
+    setAttestedUrl('');
+  }
+
+  /** Puts the record back to what the machine observed. */
+  function retractAttestation(draft: Draft) {
+    const result = retract(draft);
+    if (isRefusal(result)) {
+      toast({ title: 'Nothing to take back', description: result.refused });
+      return;
+    }
+    patchDraft(draft.id, result);
+    updateState((current) => ({
+      ...current,
+      activity: logActivity(current, {
+        type: 'draft',
+        title: 'Correction withdrawn',
+        detail: `${platformProfile(draft.platform).label} · back to what the shell saw`,
+      }),
+    }));
   }
 
   /**
@@ -716,11 +784,66 @@ export function Drafts({
 
                   {draft.status === 'failed' && draft.lastError ? (
                     <div
-                      className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                      className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
                       data-testid={`error-${draft.id}`}
                     >
-                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span>{draft.lastError}</span>
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{draft.lastError}</span>
+                      </div>
+                      {/*
+                        The operator can see the account; this app cannot. When
+                        they have looked and the post is there, the record needs
+                        a way to say so — see `lib/attestation.ts` for why that
+                        is `attested` and never `published`.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => setAttesting(draft)}
+                        className="text-xs underline underline-offset-2"
+                        data-testid={`button-attest-${draft.id}`}
+                      >
+                        Checked the account — it actually posted
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {draft.status === 'attested' && draft.attestation ? (
+                    <div
+                      className="space-y-2 rounded-md border border-chart-4/40 bg-chart-4/10 p-3 text-sm text-chart-4"
+                      data-testid={`attested-${draft.id}`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{describeAttestation(draft)}</span>
+                      </div>
+                      {draft.lastError ? (
+                        <p className="text-xs opacity-80">
+                          What the shell saw at the time: {draft.lastError}
+                        </p>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-3">
+                        {draft.attestation.postUrl ? (
+                          <a
+                            href={draft.attestation.postUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 text-xs underline underline-offset-2"
+                            data-testid={`link-attested-${draft.id}`}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            The link you gave
+                          </a>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => retractAttestation(draft)}
+                          className="text-xs underline underline-offset-2"
+                          data-testid={`button-retract-${draft.id}`}
+                        >
+                          Take that back
+                        </button>
+                      </div>
                     </div>
                   ) : null}
 
@@ -890,6 +1013,59 @@ export function Drafts({
           })}
         </div>
       )}
+
+      {/*
+        Correcting the record. The dialog exists rather than a bare button
+        because this is a claim recorded under someone's name, and it should
+        take a deliberate act — and because the link is worth asking for while
+        the operator is already looking at the post.
+      */}
+      <AlertDialog
+        open={attesting !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAttesting(null);
+            setAttestedUrl('');
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>This one actually posted?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {operator === null
+                ? 'Corrections are recorded under your name. Add it under Settings › Approver name first.'
+                : `The network never confirmed this, so the shell recorded it as failed. Recording it as posted on your word keeps both facts: what the shell saw, and what ${operator} found on the account. It will never read as confirmed by the network.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="attested-url">Link to the post (optional)</Label>
+            <Input
+              id="attested-url"
+              value={attestedUrl}
+              onChange={(event) => setAttestedUrl(event.target.value)}
+              placeholder="https://…"
+              data-testid="input-attested-url"
+            />
+            <p className="text-xs text-muted-foreground">
+              Not required — your word stands either way. It is the difference
+              between a claim and one anyone can check.
+            </p>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-attest">
+              Never mind
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={operator === null}
+              onClick={() => attesting && confirmAttestation(attesting)}
+              data-testid="button-confirm-attest"
+            >
+              Record that it posted
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={pendingPublish !== null}

@@ -362,6 +362,15 @@ Two open project tasks live here (see §11).
   read `.length` inside its `map`, and the section died in its error boundary,
   hiding three healthy drafts because one old one sat beside them. Hydration
   fills gaps in the in-memory copy only; it never rewrites the ledger.
+- **The publish budget is three coupled numbers**: `SETUP_BUDGET_MS` (12s),
+  `COMPOSE_BUDGET_MS` (18s, struck *after* the page loads), and the API
+  server's bridge `REQUEST_TIMEOUT_MS` (40s), which must outlast their sum.
+  The compose deadline used to be struck before an unbounded `loadURL`, so a
+  cold start left confirmation no window: measured at 20.7s for the first
+  publish after launch against a 17s budget, versus ~6s warm. The post went out
+  and was recorded `failed`. `PRE_CONFIRM_SHARE` now guarantees confirmation a
+  reserve, and `onPhase` logs every phase duration — read that log before
+  theorising about a slow publish.
 - **A file dropped anywhere but a card is swallowed in `App.tsx`.** The default
   action for a file dropped on a page is to navigate to it, and this page is the
   privileged UI origin — the one view holding `window.uaShell`. A near miss

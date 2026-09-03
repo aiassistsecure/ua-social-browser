@@ -126,10 +126,12 @@ function run(
     mediaRequired: boolean;
     mediaFirst: boolean;
     afterAttach: Array<{ click: string; waitFor: string; label: string }>;
+    budgetMs: number;
   }> = {},
 ) {
   const { page, calls } = fakePage(script);
-  const time = clock(5_000);
+  const phases: Array<{ phase: string; ms: number }> = [];
+  const time = clock(over.budgetMs ?? 5_000);
   return runComposeFlow(page, {
     label: "TestNet",
     body: "the approved words",
@@ -144,7 +146,8 @@ function run(
     hasOpener: over.hasOpener ?? false,
     sleep: time.sleep,
     now: time.now,
-  }).then((outcome) => ({ outcome, calls }));
+    onPhase: (phase, ms) => phases.push({ phase, ms }),
+  }).then((outcome) => ({ outcome, calls, phases, elapsed: time.now() }));
 }
 
 describe("the shared composer flow", () => {
@@ -465,5 +468,78 @@ describe("the shared composer flow", () => {
     assert.equal(outcome.kind, "rejected");
     assert.match(outcome.detail, /never showed a caption field/);
     assert.ok(!calls.includes("clickSubmit"));
+  });
+
+  test("confirmation always gets a real window, however slow the composer was", async () => {
+    // The failure this reserve exists for, reproduced. On a cold start X's
+    // composer took most of the budget to appear; the post was typed and
+    // submitted with almost nothing left, and the toast arrived after the flow
+    // had given up. The post was live and the app said it had failed.
+    //
+    // The composer here appears only after the pre-confirm cap, so the flow
+    // must refuse rather than submit-and-not-watch.
+    const { outcome, calls } = await run(
+      { probe: ["waiting"], clickSubmit: [true], confirm: [{ state: "sent" }] },
+      { budgetMs: 18_000 },
+    );
+
+    assert.equal(outcome.kind, "rejected");
+    assert.ok(
+      !calls.includes("clickSubmit"),
+      "nothing may be submitted once there is no time left to confirm it",
+    );
+  });
+
+  test("the pre-confirm phases cannot consume the whole budget", async () => {
+    const { phases, elapsed } = await run(
+      { probe: ["waiting"] },
+      { budgetMs: 18_000 },
+    );
+
+    const composer = phases.find((p) => p.phase === "composer");
+    assert.ok(composer, "the composer phase should report itself");
+    assert.ok(
+      composer.ms < 18_000,
+      `waiting for a composer must stop before the budget ends, spent ${composer.ms}ms`,
+    );
+    assert.ok(
+      elapsed <= 18_000,
+      `the flow must not overrun its budget, took ${elapsed}ms`,
+    );
+  });
+
+  test("a slow composer still leaves time to see a late toast", async () => {
+    // The composer appears late but inside the cap, and the network confirms
+    // several polls after submitting — which is what X actually does.
+    const { outcome, phases } = await run(
+      {
+        probe: ["waiting", "waiting", "waiting", "composer"],
+        clickSubmit: [true],
+        confirm: [{ state: "waiting" }, { state: "waiting" }, { state: "sent" }],
+      },
+      { budgetMs: 18_000 },
+    );
+
+    assert.equal(outcome.kind, "published");
+    const confirm = phases.find((p) => p.phase === "confirm");
+    assert.ok(confirm, "the confirm phase should report itself");
+  });
+
+  test("every phase reports how long it took", async () => {
+    // The whole flow used to be silent, so an unconfirmed post gave no clue
+    // whether the budget went on the composer, the button, or the network.
+    const { phases } = await run({
+      probe: ["composer"],
+      clickSubmit: [true],
+      confirm: [{ state: "sent" }],
+    });
+
+    assert.deepEqual(
+      phases.map((p) => p.phase),
+      ["composer", "submit", "confirm"],
+    );
+    for (const p of phases) {
+      assert.equal(typeof p.ms, "number");
+    }
   });
 });

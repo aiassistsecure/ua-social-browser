@@ -43,8 +43,10 @@ export type SubmitContext = {
    * them, it does not decide whether they are allowed.
    */
   media: string[];
-  /** Absolute epoch ms; the API server's bridge call times out at 20s. */
+  /** Absolute epoch ms, struck after the composer page has loaded. */
   deadline: number;
+  /** Reports how long each phase took, for diagnosing an unconfirmed post. */
+  onPhase?: (phase: string, ms: number, detail?: Record<string, unknown>) => void;
 };
 
 export type PlatformAdapter = {
@@ -105,6 +107,7 @@ function driven(label: string, config: ComposerConfig) {
       deadline: context.deadline,
       allowHotkey: config.submitHotkey === true,
       hasOpener: config.opener !== undefined,
+      ...(context.onPhase ? { onPhase: context.onPhase } : {}),
     });
 }
 

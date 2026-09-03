@@ -33,11 +33,51 @@ import { createLogger, errorFields } from "../logger";
 const log = createLogger("publisher");
 
 /**
- * `session-bridge.ts` in the API server abandons the call at 20s. Finishing
- * just inside that leaves the shell — not the caller — deciding what an
- * unconfirmed attempt means.
+ * How long the composer flow gets, measured from the moment the page is up.
+ *
+ * This used to be struck before `applyEmulation` and `loadURL` ran, and
+ * neither of those is bounded by it — so on a cold start the flow inherited
+ * whatever was left rather than the budget it was supposed to have. Measured
+ * on a real machine: the first publish after launch took 20.7s and reported
+ * unconfirmed, while every warm attempt afterwards finished in about 6s. The
+ * post had gone out; confirmation had been squeezed to nothing.
+ *
+ * Setup is now charged to `SETUP_BUDGET_MS` and the clock for the flow starts
+ * afterwards, so a slow page load costs time but never costs certainty.
  */
-const PUBLISH_BUDGET_MS = 17_000;
+const COMPOSE_BUDGET_MS = 18_000;
+
+/**
+ * How long the window gets to apply its UA profile and load the composer.
+ *
+ * Exceeding this is not a failure: the page may still be arriving, and the
+ * flow's own probe loop waits for the composer anyway. All this does is stop
+ * the wait being charged to the flow's budget.
+ */
+const SETUP_BUDGET_MS = 12_000;
+
+/**
+ * The worst case the API server's bridge call has to tolerate: setup, then the
+ * flow, plus room to tear the window down. `session-bridge.ts` must allow more
+ * than this or it will abandon an attempt that is still deciding — which is
+ * exactly the ambiguity the whole design exists to avoid.
+ */
+export const PUBLISH_WORST_CASE_MS = SETUP_BUDGET_MS + COMPOSE_BUDGET_MS + 3_000;
+
+/** Resolves when `work` settles or `ms` elapses, whichever comes first. */
+async function atMost<T>(work: Promise<T>, ms: number): Promise<T | "timeout"> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function identityForEntry(entry: WorkspaceEntry) {
   const profile = entry.profile;
@@ -266,16 +306,49 @@ export function createPublisher(deps: {
       },
     });
 
-    const deadline = Date.now() + PUBLISH_BUDGET_MS;
-
     try {
-      await applyEmulation(window.webContents, identity);
-      await window.loadURL(adapter.composeUrl);
+      // Setup on its own clock. A slow cold start delays the post; it must not
+      // eat the window in which the post is confirmed.
+      const setupStarted = Date.now();
+      await atMost(
+        applyEmulation(window.webContents, identity),
+        SETUP_BUDGET_MS,
+      );
+      const loaded = await atMost(
+        window.loadURL(adapter.composeUrl).then(() => "loaded" as const),
+        Math.max(1_000, SETUP_BUDGET_MS - (Date.now() - setupStarted)),
+      );
+      const setupMs = Date.now() - setupStarted;
+
+      if (loaded === "timeout") {
+        // Not fatal, and deliberately not treated as one: the page is probably
+        // still arriving and the flow polls for the composer regardless.
+        log.warn("Composer page still loading; starting the flow anyway", {
+          workspaceId: input.workspaceId,
+          draftId: input.draftId,
+          setupMs,
+        });
+      }
+
+      // Struck here, after the page is up, rather than before setup ran.
+      const deadline = Date.now() + COMPOSE_BUDGET_MS;
+
       return await adapter.submit({
         contents: window.webContents,
         body: input.body,
         media: media.paths,
         deadline,
+        onPhase: (phaseName, ms, detail) => {
+          log.info("Publish phase", {
+            workspaceId: input.workspaceId,
+            draftId: input.draftId,
+            platform: input.platform,
+            phase: phaseName,
+            ms,
+            setupMs,
+            ...detail,
+          });
+        },
       });
     } catch (error) {
       log.error("Publish attempt threw", {

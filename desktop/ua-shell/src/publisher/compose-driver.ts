@@ -137,6 +137,15 @@ export type ComposeFlowOptions = {
   mediaFirst?: boolean;
   /** Screens between the upload and the caption. */
   afterAttach?: Array<{ click: string; waitFor: string; label: string }>;
+  /**
+   * Called as each phase ends, with how long it took.
+   *
+   * The flow is otherwise silent, which meant an unconfirmed post gave no clue
+   * whether the budget went on waiting for a composer, hunting for a button,
+   * or genuinely waiting for a network that never answered. Those need
+   * different fixes and used to be indistinguishable from the outside.
+   */
+  onPhase?: (phase: string, ms: number, detail?: Record<string, unknown>) => void;
   /** Absolute epoch ms. The API server abandons the bridge call at 20s. */
   deadline: number;
   allowHotkey: boolean;
@@ -153,6 +162,26 @@ const POLL_MS = 250;
 /** How much of the remaining budget the click-the-button phase may spend. */
 const SUBMIT_PHASE_SHARE = 0.4;
 
+/**
+ * The share of the budget that everything before confirmation may spend.
+ *
+ * Confirmation is the only phase that decides whether a post is reported as
+ * having happened, so it is the one phase that must never be squeezed to
+ * nothing. Getting there with no time left does not mean the post failed — it
+ * means the post went out and nobody watched, which is the worst outcome this
+ * flow can produce: the network has it, the ledger says `failed`, and a person
+ * has to go and look.
+ *
+ * That is not hypothetical. On a cold start X's composer took most of a
+ * seventeen-second budget to appear, the post was typed and submitted with
+ * about a second to spare, and the toast arrived after the flow had already
+ * given up. The post was live; the app said it had failed.
+ */
+const PRE_CONFIRM_SHARE = 0.6;
+
+/** Confirmation always gets at least this long, whatever came before. */
+const MIN_CONFIRM_MS = 4_000;
+
 export async function runComposeFlow(
   page: ComposerPage,
   options: ComposeFlowOptions,
@@ -162,6 +191,20 @@ export async function runComposeFlow(
   const mediaFirst = options.mediaFirst === true;
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
+
+  const startedAt = now();
+  const phase = (name: string, since: number, detail?: Record<string, unknown>) =>
+    options.onPhase?.(name, now() - since, detail);
+
+  /**
+   * The point by which everything except confirmation must be done.
+   *
+   * Capped rather than left to consume the whole budget, so confirmation
+   * always has a real window — see `PRE_CONFIRM_SHARE`.
+   */
+  const totalBudget = deadline - startedAt;
+  const confirmReserve = Math.max(MIN_CONFIRM_MS, totalBudget * (1 - PRE_CONFIRM_SHARE));
+  const preConfirmDeadline = Math.max(startedAt, deadline - confirmReserve);
 
   // 0. A network that cannot take a text-only post says so before anything is
   //    opened. The UI refuses this too, but a draft can reach here having lost
@@ -182,7 +225,8 @@ export async function runComposeFlow(
   //    waited for is the upload control.
   let opened = false;
   let state: ProbeState = "waiting";
-  while (now() < deadline) {
+  const composerSince = now();
+  while (now() < preConfirmDeadline) {
     state = mediaFirst ? await page.probeUpload() : await page.probe();
     if (state !== "waiting") break;
     if (hasOpener && !opened) {
@@ -190,6 +234,7 @@ export async function runComposeFlow(
     }
     await sleep(POLL_MS);
   }
+  phase("composer", composerSince, { state });
 
   if (state === "login") {
     return {
@@ -249,7 +294,7 @@ export async function runComposeFlow(
 
     if (options.reportsMediaReady) {
       let ready = false;
-      while (now() < deadline && !ready) {
+      while (now() < preConfirmDeadline && !ready) {
         ready = await page.mediaReady();
         if (!ready) await sleep(POLL_MS);
       }
@@ -270,7 +315,7 @@ export async function runComposeFlow(
   //     someone hunting through the whole flow for a control that moved.
   for (const step of options.afterAttach ?? []) {
     let advanced = false;
-    while (now() < deadline && !advanced) {
+    while (now() < preConfirmDeadline && !advanced) {
       advanced = await page.advance(step.click);
       if (!advanced) await sleep(POLL_MS);
     }
@@ -282,7 +327,7 @@ export async function runComposeFlow(
     }
 
     let arrived = false;
-    while (now() < deadline && !arrived) {
+    while (now() < preConfirmDeadline && !arrived) {
       arrived = await page.present(step.waitFor);
       if (!arrived) await sleep(POLL_MS);
     }
@@ -297,7 +342,7 @@ export async function runComposeFlow(
   // 2d. Now the caption field exists, so the approved words can go in.
   if (mediaFirst) {
     let editorReady = false;
-    while (now() < deadline && !editorReady) {
+    while (now() < preConfirmDeadline && !editorReady) {
       editorReady = (await page.probe()) === "composer";
       if (!editorReady) await sleep(POLL_MS);
     }
@@ -323,15 +368,20 @@ export async function runComposeFlow(
   //    gets only part of the budget: spending all of it means the fallback
   //    fires with no time left to find out what it did, which turns every
   //    button drift into an unconfirmed post.
+  const submitSince = now();
   const submitDeadline = allowHotkey
-    ? Math.min(deadline, now() + Math.max(1_000, (deadline - now()) * SUBMIT_PHASE_SHARE))
-    : deadline;
+    ? Math.min(
+        preConfirmDeadline,
+        now() + Math.max(1_000, (preConfirmDeadline - now()) * SUBMIT_PHASE_SHARE),
+      )
+    : preConfirmDeadline;
 
   let submitted = false;
   while (now() < submitDeadline && !submitted) {
     submitted = await page.clickSubmit();
     if (!submitted) await sleep(200);
   }
+  phase("submit", submitSince, { clicked: submitted });
 
   if (!submitted) {
     if (!allowHotkey) {
@@ -346,6 +396,11 @@ export async function runComposeFlow(
   }
 
   // 4. Confirm. Silence is not success.
+  //
+  //    This is the phase the reserve exists for: it always gets a real window,
+  //    because arriving here with nothing left means a post that went out gets
+  //    reported as failed.
+  const confirmSince = now();
   while (now() < deadline) {
     const confirmation = await page.confirm();
 
@@ -361,6 +416,7 @@ export async function runComposeFlow(
     }
 
     if (confirmation.state === "sent") {
+      phase("confirm", confirmSince, { outcome: "sent" });
       return {
         kind: "published",
         postUrl: confirmation.postUrl,
@@ -372,6 +428,7 @@ export async function runComposeFlow(
     await sleep(POLL_MS);
   }
 
+  phase("confirm", confirmSince, { outcome: "unconfirmed" });
   return unconfirmedOutcome(
     `The post was submitted to ${label} but no confirmation arrived before the deadline. ` +
       `Check the account: this attempt will not be retried automatically, because a retry could double-post.`,

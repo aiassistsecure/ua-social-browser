@@ -58,7 +58,19 @@ export type BridgePublishOutcome =
   | { kind: "rejected"; detail: string }
   | { kind: "unavailable"; detail: string };
 
-const REQUEST_TIMEOUT_MS = 20_000;
+/**
+ * How long a bridge call may take.
+ *
+ * Coupled to the shell's publish budget and deliberately larger than it. The
+ * shell charges setup and the composer flow separately (12s + 18s + teardown,
+ * see `PUBLISH_WORST_CASE_MS` in its publisher), and abandoning a call that is
+ * still deciding would manufacture the exact ambiguity the design exists to
+ * avoid: a post already submitted, with nobody left listening for the answer.
+ *
+ * Raise this whenever that budget grows. It was 20s against a 17s budget, and
+ * the 17s was itself being eaten by an unbounded page load.
+ */
+const REQUEST_TIMEOUT_MS = 40_000;
 
 /** Header the shell requires on every bridge call. */
 const BRIDGE_TOKEN_HEADER = "X-UA-Shell-Token";

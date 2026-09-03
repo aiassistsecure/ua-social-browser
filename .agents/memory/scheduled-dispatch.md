@@ -45,3 +45,27 @@ weeks later, and the record saying "already sent" is the only thing preventing a
 second send. Trimming the oldest entries posts the oldest unreconciled drafts
 twice. For the same reason reconciliation is a lookup by name, not a recent
 feed: an outcome must not be able to scroll off a page while nobody was looking.
+
+## Persisted documents outlive the type that describes them
+
+`lib/hydrate.ts` in the workspace UI brings a stored `BrowserState` up to the
+shape the current build expects, at the single point a document enters the app.
+Add a field to a persisted type and you add its backfill here in the same
+commit, with a test for a document that predates it.
+
+This is not defensive habit, it is a shipped outage. Attachments added
+`media: DraftMedia[]` to `Draft` and the review queue rendered
+`draft.media.length` directly. Every draft the composer wrote afterwards
+carried `media: []`, so it all looked correct — but a draft already in the
+ledger from before the field existed came back with `media` undefined. The
+queue mapped the list, hit that one draft, threw
+`Cannot read properties of undefined (reading 'length')` inside `Array.map`,
+and the whole section went down in its error boundary. Three brand-new drafts
+were invisible because of one old one next to them.
+
+TypeScript cannot catch this class: the type says the field is required, and
+the JSON on disk says nothing at all. Only a read-time backfill can.
+
+Hydration is in-memory. It never rewrites what is on disk — the ledger keeps
+every byte it had, and the next ordinary save simply includes the filled-in
+defaults, which are additive.

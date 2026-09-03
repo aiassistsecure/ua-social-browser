@@ -353,6 +353,15 @@ Two open project tasks live here (see §11).
   cards an index key slides one card's "I read this and take responsibility for
   it" onto different text, which then reaches drafts under a sign-off nobody
   gave. There is a test named for that exact hazard.
+- **A field added to a persisted type must be backfilled in `lib/hydrate.ts`
+  in the same commit.** The ledger holds documents written by every build that
+  came before, so a new required field is undefined on all of them and
+  TypeScript cannot see the mismatch — the type says required, the JSON on disk
+  says nothing. Attachments shipped without this and took the review queue
+  down: drafts written before `media` existed came back undefined, the queue
+  read `.length` inside its `map`, and the section died in its error boundary,
+  hiding three healthy drafts because one old one sat beside them. Hydration
+  fills gaps in the in-memory copy only; it never rewrites the ledger.
 - **Navigation** is section state in `App.tsx`, not a router.
   `onNavigate(section, { draftId })` focuses one post; the review queue widens
   its filter and scrolls to it. If a post can belong to another workspace,

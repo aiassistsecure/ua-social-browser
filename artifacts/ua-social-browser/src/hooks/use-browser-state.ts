@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { initialState } from '@/data';
+import { hydrateDraft, hydrateState } from '@/lib/hydrate';
 import { toast } from '@/hooks/use-toast';
 import type { BrowserState, Draft } from '@/types';
 
@@ -32,7 +33,10 @@ export function useBrowserState() {
       })
       .then((payload) => {
         if (cancelled) return;
-        if (payload.state) setState(payload.state);
+        // The ledger holds documents written by older builds. Anything this
+        // version added is filled in here, once, rather than defended against
+        // at every place that reads it — see `lib/hydrate.ts`.
+        if (payload.state) setState(hydrateState(payload.state));
         setIntegrity(payload.integrity);
         setStatus('saved');
         hydrated.current = true;
@@ -61,7 +65,9 @@ export function useBrowserState() {
     const authoritative = new Map(
       payload.state.drafts
         .filter((draft) => heldIds.has(draft.id))
-        .map((draft) => [draft.id, draft] as const),
+        // Held drafts come from the same store as the initial load, so they
+        // need the same gap-filling before anything renders them.
+        .map((draft) => [draft.id, hydrateDraft(draft)] as const),
     );
 
     setState((current) => {

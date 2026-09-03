@@ -1,13 +1,10 @@
 import {
-  ArrowLeft,
-  ArrowRight,
   Cloud,
   CloudOff,
   Fingerprint,
   Loader2,
   Lock,
   Plus,
-  RotateCw,
   ShieldCheck,
   X,
 } from 'lucide-react';
@@ -15,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { PlatformGlyph } from '@/components/app/platform-glyph';
+import { ShellMark } from '@/components/app/shell-mark';
 import { cn } from '@/lib/utils';
 import { PLATFORM_ORIGIN, PLATFORM_LABEL } from '@/lib/workspace';
 import type { SaveStatus } from '@/hooks/use-browser-state';
@@ -99,10 +97,8 @@ export function BrowserChrome({
     <header className="shrink-0 border-b border-border bg-sidebar">
       {/* Tab strip — one tab per isolated workspace */}
       <div className="flex items-end gap-1 px-2 pt-2">
-        <div className="flex items-center gap-2 pb-1.5 pr-2 pl-1">
-          <span className="h-3 w-3 rounded-full bg-destructive/70" />
-          <span className="h-3 w-3 rounded-full bg-chart-3/70" />
-          <span className="h-3 w-3 rounded-full bg-chart-2/70" />
+        <div className="flex items-center pb-1.5 pr-2.5 pl-1.5">
+          <ShellMark accent={active?.accent} className="h-[21px] w-[21px]" />
         </div>
 
         <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
@@ -169,18 +165,15 @@ export function BrowserChrome({
 
       {/* Toolbar — omnibox plus the identity of the active isolated context */}
       <div className="flex items-center gap-2 border-t border-border/60 bg-background px-3 py-2">
-        <div className="flex items-center gap-0.5 text-muted-foreground">
-          <Button size="icon" variant="ghost" className="h-8 w-8" disabled aria-label="Back">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8" disabled aria-label="Forward">
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-          <Button size="icon" variant="ghost" className="h-8 w-8" disabled aria-label="Reload">
-            <RotateCw className="h-4 w-4" />
-          </Button>
-        </div>
+        {/*
+          No back / forward / reload here.
 
+          They used to sit in this spot as three permanently `disabled` buttons.
+          Navigation belongs to the shell's own toolbar, which drives the real
+          `WebContentsView`; this header sits above the privileged UI and has
+          nothing to navigate. Controls that can never do anything are worse
+          than absent — they invite a click and answer it with silence.
+        */}
         <div
           className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-border bg-card px-3"
           data-testid="omnibox"

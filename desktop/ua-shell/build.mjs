@@ -49,3 +49,7 @@ await build({
 });
 
 await cp(from("src/renderer/toolbar.html"), path.join(distDir, "toolbar.html"));
+
+// The app icon travels with the build for the same reason the toolbar's HTML
+// does: the main process resolves everything it needs from `__dirname`.
+await cp(from("assets/icon.png"), path.join(distDir, "icon.png"));

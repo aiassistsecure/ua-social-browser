@@ -1,3 +1,31 @@
+<!--
+  The product mark.
+
+  What was here before was Replit template filler: a plain #FF3C00 rounded
+  square, a colour this app uses nowhere. It is the first thing the privileged
+  UI origin serves about itself, so it may as well be true.
+
+  The geometry is the same mark the tab strip draws
+  (`src/components/app/shell-mark.tsx`) on the same 24-grid, scaled up and
+  centred.
+
+  White on the primary violet rather than the reverse. The chrome draws this
+  mark as a thin outline because it sits among tabs at 21px; an icon has to
+  survive a 16px favicon and a dock, and a thin mark on a dark tile disappears
+  at both. Rendered at 16 / 32 / 64 / 128px, the solid tile was the only
+  treatment still legible at the smallest size — so the icon is not simply the
+  chrome mark scaled up, and should not be "corrected" into one.
+
+  The colour is fixed here, unlike in the chrome, where the mark takes the
+  active workspace's accent to answer *which identity am I acting as*. An icon
+  speaks for the app rather than for a workspace, which makes this the one
+  place a fixed brand colour is the honest choice.
+-->
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+  <rect width="180" height="180" rx="40" fill="#7149e9"/>
+  <g transform="translate(22 22) scale(5.6667)">
+    <circle cx="12" cy="12" r="9.35" fill="none" stroke="#ffffff" stroke-width="1.65"/>
+    <path d="M12 10.7 L12 16.9 Q12 19.3 15.3 19.1" fill="none" stroke="#ffffff" stroke-width="3.03" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="12" cy="2.65" r="2.05" fill="#ffffff"/>
+  </g>
 </svg>

@@ -203,11 +203,28 @@ async function bootstrap(): Promise<void> {
 
   // 4. The window.
   const dist = __dirname;
+  const appIconPath = path.join(dist, "icon.png");
+
+  // An unpackaged macOS run shows Electron's own icon in the dock unless it is
+  // set explicitly; a packaged build takes it from the bundle instead and this
+  // is a no-op. Failing to load an icon is never worth refusing to start over,
+  // so it is logged and shrugged off.
+  if (process.platform === "darwin" && app.dock) {
+    try {
+      app.dock.setIcon(appIconPath);
+    } catch (error) {
+      log.warn("Could not set the dock icon", {
+        icon: appIconPath,
+        ...errorFields(error),
+      });
+    }
+  }
   const window = new ShellWindow({
     workspaceUiUrl,
     privilegedPreload: path.join(dist, "preload-privileged.cjs"),
     toolbarPreload: path.join(dist, "preload-toolbar.cjs"),
     toolbarHtml: path.join(dist, "toolbar.html"),
+    appIcon: appIconPath,
     directory,
   });
 

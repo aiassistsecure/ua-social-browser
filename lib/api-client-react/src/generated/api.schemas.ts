@@ -69,7 +69,7 @@ export interface AiSuggestionInput {
   model?: string;
   /**
      * @minimum 1
-     * @maximum 4
+     * @maximum 8
      */
   numberOfSuggestions?: number;
   /**

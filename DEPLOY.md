@@ -261,7 +261,13 @@ token and no headless impersonation anywhere in this path.
   the shared composer flow in `src/publisher/compose-driver.ts` (probe the page,
   open the composer, type, submit, wait for the network's confirmation).
   Instagram and Pinterest are driven upload-first: the picture goes in before
-  the caption, and a post with no attachment is refused. TikTok and YouTube
+  the caption, and a post with no attachment is refused. Instagram is reached
+  by URL (`/create/select/`) rather than by clicking its navigation, and the
+  workspace's UA profile selects which composer graph is driven — a phone is
+  served a different flow entirely. Instagram was verified with a real post on
+  2026-09-03 under the Chrome · macOS profile; the mobile graph has not been
+  watched working, and a composer that cannot be found now names the profile in
+  its refusal. TikTok and YouTube
   refuse because a post there needs a video and an upload wizard this build
   does not drive; Reddit refuses because it needs a community and a title the
   draft model does not carry. Pinterest publishes to whichever board is

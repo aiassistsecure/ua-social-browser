@@ -65,6 +65,12 @@ describe(
             detail: `Stub publisher pretended to open a sign-in tab for ${workspaceId}.`,
           };
         },
+        async signOut() {
+          // Nothing in these suites exercises a sign-out; the port
+          // requires it, and a fake that lies about succeeding would be
+          // worse than one that plainly refuses.
+          return { signedOut: false, detail: "not exercised by this test" };
+        },
         async publish(input) {
           return ledger.run(input.idempotencyKey, input, async (): Promise<PublishOutcome> => {
             published.push(input.draftId);

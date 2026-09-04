@@ -284,6 +284,57 @@ export async function beginSignIn(
   }
 }
 
+export type BridgeSignOut = { signedOut: boolean; detail: string };
+
+/**
+ * Asks the shell to destroy one network's session inside a workspace.
+ *
+ * The shell removes the cookies and then reads the session back; `signedOut`
+ * is the answer of that read. This layer adds nothing to it — inventing a
+ * success here would be the same lie the shell is careful not to tell.
+ */
+export async function signOutOfSession(
+  workspaceId: string,
+  platform?: string,
+): Promise<BridgeSignOut> {
+  if (!isBridgeConfigured()) {
+    return { signedOut: false, detail: unavailableDetail() };
+  }
+
+  try {
+    const { ok, payload } = await callBridge(
+      `/signout/${encodeURIComponent(workspaceId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ platform }),
+      },
+    );
+
+    const data = (payload ?? {}) as { signedOut?: boolean; detail?: string };
+
+    if (!ok) {
+      return {
+        signedOut: false,
+        detail: data.detail ?? "The shell could not sign this workspace out.",
+      };
+    }
+
+    return {
+      signedOut: Boolean(data.signedOut),
+      detail: data.detail ?? "The shell reported no detail for this sign-out.",
+    };
+  } catch (error) {
+    return {
+      signedOut: false,
+      detail:
+        error instanceof Error
+          ? `Session bridge unreachable: ${error.message}. The account is still signed in.`
+          : "Session bridge unreachable. The account is still signed in.",
+    };
+  }
+}
+
 export async function publishThroughSession(
   input: BridgePublishInput,
 ): Promise<BridgePublishOutcome> {

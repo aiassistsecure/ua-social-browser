@@ -27,6 +27,8 @@ export * from './sessionStatus';
 export * from './sessionStatusHandleSource';
 export * from './signInInvitation';
 export * from './signInRequest';
+export * from './signOutRequest';
+export * from './signOutResult';
 export * from './tenantInfo';
 export * from './tenantInfoMode';
 export * from './uploadedMedia';

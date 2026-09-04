@@ -86,6 +86,33 @@ paths:
                 $ref: "#/components/schemas/SignInInvitation"
         "400":
           description: workspaceId is missing
+  /session/signout:
+    post:
+      operationId: signOutOfSession
+      tags: [publish]
+      summary: Destroy one network's session inside a workspace
+      description: >-
+        Removes the cookies this workspace holds for one network, then reads
+        the session back and reports what that read said. Scoped to a single
+        network because a workspace may hold accounts on several and each is
+        its own session. `signedOut` is the answer of the verification, never
+        of the removal itself: a sign-out reported without checking is the same
+        class of claim as a post reported without confirmation. A session kept
+        outside cookies (Bluesky and Mastodon use local storage) is reported as
+        not signed out, with a reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignOutRequest"
+      responses:
+        "200":
+          description: What the shell found when it tried, and what the session says now
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignOutResult"
   /publish:
     post:
       operationId: publishPost
@@ -365,6 +392,30 @@ components:
           description: Why the handle is absent, phrased for the operator.
         detail:
           type: string
+    SignOutRequest:
+      type: object
+      required: [workspaceId]
+      properties:
+        workspaceId:
+          type: string
+        platform:
+          type: string
+          description: >-
+            Which network to sign out of inside this workspace. Defaults to the
+            workspace's own platform. Only this network's cookies are removed —
+            other accounts in the same workspace keep their sessions.
+    SignOutResult:
+      type: object
+      required: [signedOut, detail]
+      properties:
+        signedOut:
+          type: boolean
+          description: >-
+            Whether the session reads signed out *after* the attempt. False
+            means the account is still usable and must not be treated as gone.
+        detail:
+          type: string
+          description: Shown to the operator verbatim.
     SignInRequest:
       type: object
       required: [workspaceId]

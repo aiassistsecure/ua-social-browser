@@ -4,6 +4,8 @@ import {
   BeginSignInResponse,
   GetSessionStatusResponse,
   PublishPostBody,
+  SignOutOfSessionBody,
+  SignOutOfSessionResponse,
 } from "@workspace/api-zod";
 import { readBrowserState } from "../lib/browser-store";
 import { releaseClaim, takeClaim } from "../lib/dispatch-claims";
@@ -12,7 +14,7 @@ import {
   idempotencyKeyFor,
 } from "../lib/publish-dispatch";
 import { mediaFingerprint, type MediaRef } from "../lib/media-store";
-import { beginSignIn, readSessionStatus } from "../lib/session-bridge";
+import { beginSignIn, readSessionStatus, signOutOfSession } from "../lib/session-bridge";
 import { asStoredDraft, type StoredDraft } from "../lib/stored-draft";
 import { tenantOrUnauthorized } from "../lib/tenant";
 
@@ -178,6 +180,36 @@ router.post("/session/signin", async (req, res) => {
   );
 
   return res.json(BeginSignInResponse.parse(invitation));
+});
+
+/**
+ * Sign-out.
+ *
+ * Destroys one network's session inside a workspace and reports what the
+ * session says afterwards. Nothing here decides success: the shell removes the
+ * cookies, re-reads, and this passes that answer along.
+ */
+router.post("/session/signout", async (req, res) => {
+  const parsed = SignOutOfSessionBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "workspaceId is required" });
+  }
+
+  const outcome = await signOutOfSession(
+    parsed.data.workspaceId,
+    parsed.data.platform,
+  );
+
+  req.log.info(
+    {
+      workspaceId: parsed.data.workspaceId,
+      platform: parsed.data.platform ?? "(workspace default)",
+      signedOut: outcome.signedOut,
+    },
+    "Sign-out requested",
+  );
+
+  return res.json(SignOutOfSessionResponse.parse(outcome));
 });
 
 router.post("/publish", async (req, res) => {

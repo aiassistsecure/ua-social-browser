@@ -29,6 +29,7 @@ import type { WebContents } from "electron";
 import type { PublishOutcome } from "../session-bridge-server";
 import type { IdentityConfig } from "./identity";
 import { composerPage, runComposeFlow, type ComposerConfig } from "./compose-driver";
+import type { DeviceClass } from "./device";
 
 export type SessionDetection =
   | { kind: "cookie"; names: string[] }
@@ -47,6 +48,22 @@ export type SubmitContext = {
   deadline: number;
   /** Reports how long each phase took, for diagnosing an unconfirmed post. */
   onPhase?: (phase: string, ms: number, detail?: Record<string, unknown>) => void;
+  /**
+   * Which composer graph to drive, derived from the workspace's UA profile.
+   *
+   * Not a preference: it is what the network will actually serve. Instagram
+   * gives a phone a different flow with different elements and different URLs,
+   * so driving the desktop graph against it fails at the first probe.
+   */
+  device: DeviceClass;
+  /**
+   * The UA profile's name, for refusals.
+   *
+   * A composer that cannot be found is very often the profile rather than a
+   * drifted selector — that is what happened here — and naming it turns a
+   * selector hunt into a one-line answer.
+   */
+  profileName?: string;
 };
 
 export type PlatformAdapter = {
@@ -92,10 +109,23 @@ function cannotPost(label: string, reason: string) {
   });
 }
 
-/** Wires a composer config to the shared flow. */
-function driven(label: string, config: ComposerConfig) {
-  return async (context: SubmitContext): Promise<PublishOutcome> =>
-    runComposeFlow(composerPage(context.contents, config), {
+/**
+ * Wires a network's composer to the shared flow.
+ *
+ * The graph is resolved per call rather than captured once, because which
+ * graph is correct depends on the UA profile the workspace runs under — and
+ * that is per publish, not per build.
+ */
+function driven(label: string, platform: string) {
+  return async (context: SubmitContext): Promise<PublishOutcome> => {
+    const config = composerConfigFor(platform, context.device);
+    if (!config) {
+      return {
+        kind: "rejected",
+        detail: `This build has no ${label} composer for a ${context.device} profile, so nothing was submitted.`,
+      };
+    }
+    return runComposeFlow(composerPage(context.contents, config), {
       label,
       body: context.body,
       media: context.media,
@@ -108,7 +138,9 @@ function driven(label: string, config: ComposerConfig) {
       allowHotkey: config.submitHotkey === true,
       hasOpener: config.opener !== undefined,
       ...(context.onPhase ? { onPhase: context.onPhase } : {}),
+      ...(context.profileName ? { profileName: context.profileName } : {}),
     });
+  };
 }
 
 /**
@@ -405,14 +437,14 @@ const ADAPTERS: PlatformAdapter[] = [
         ],
       },
     },
-    submit: driven("X", COMPOSERS.x!),
+    submit: driven("X", "x"),
   },
   {
     platform: "instagram",
     label: "Instagram",
     origin: "https://www.instagram.com",
     signInUrl: "https://www.instagram.com/accounts/login/",
-    composeUrl: "https://www.instagram.com/",
+    composeUrl: "https://www.instagram.com/create/select/",
     detection: { kind: "cookie", names: ["sessionid"] },
     identity: {
       idCookie: { name: "ds_user_id" },
@@ -423,7 +455,7 @@ const ADAPTERS: PlatformAdapter[] = [
         pattern: "/([A-Za-z0-9._]{1,30})/",
       },
     },
-    submit: driven("Instagram", COMPOSERS.instagram!),
+    submit: driven("Instagram", "instagram"),
   },
   {
     platform: "facebook",
@@ -435,7 +467,7 @@ const ADAPTERS: PlatformAdapter[] = [
     // `c_user` is the account id. Facebook does not show a handle in its
     // chrome and profile links are numeric, so the id is the whole answer.
     identity: { idCookie: { name: "c_user" } },
-    submit: driven("Facebook", COMPOSERS.facebook!),
+    submit: driven("Facebook", "facebook"),
   },
   {
     platform: "threads",
@@ -451,7 +483,7 @@ const ADAPTERS: PlatformAdapter[] = [
         pattern: "/@([A-Za-z0-9._]{1,30})",
       },
     },
-    submit: driven("Threads", COMPOSERS.threads!),
+    submit: driven("Threads", "threads"),
   },
   {
     platform: "linkedin",
@@ -460,7 +492,7 @@ const ADAPTERS: PlatformAdapter[] = [
     signInUrl: "https://www.linkedin.com/login",
     composeUrl: "https://www.linkedin.com/feed/?shareActive=true",
     detection: { kind: "cookie", names: ["li_at"] },
-    submit: driven("LinkedIn", COMPOSERS.linkedin!),
+    submit: driven("LinkedIn", "linkedin"),
   },
   {
     platform: "bluesky",
@@ -480,7 +512,7 @@ const ADAPTERS: PlatformAdapter[] = [
         pattern: "/profile/([A-Za-z0-9._-]{1,64})",
       },
     },
-    submit: driven("Bluesky", COMPOSERS.bluesky!),
+    submit: driven("Bluesky", "bluesky"),
   },
   {
     platform: "mastodon",
@@ -498,7 +530,7 @@ const ADAPTERS: PlatformAdapter[] = [
         selectors: [".navigation-bar__profile-account", ".account__header__tabs__name small"],
       },
     },
-    submit: driven("Mastodon", COMPOSERS.mastodon!),
+    submit: driven("Mastodon", "mastodon"),
   },
   {
     platform: "reddit",
@@ -537,7 +569,7 @@ const ADAPTERS: PlatformAdapter[] = [
     signInUrl: "https://www.pinterest.com/login/",
     composeUrl: "https://www.pinterest.com/pin-builder/",
     detection: { kind: "cookie", names: ["_pinterest_sess"] },
-    submit: driven("Pinterest", COMPOSERS.pinterest!),
+    submit: driven("Pinterest", "pinterest"),
   },
   {
     platform: "tumblr",
@@ -553,7 +585,7 @@ const ADAPTERS: PlatformAdapter[] = [
         pattern: "/blog/([A-Za-z0-9._-]{1,64})",
       },
     },
-    submit: driven("Tumblr", COMPOSERS.tumblr!),
+    submit: driven("Tumblr", "tumblr"),
   },
 ];
 
@@ -569,8 +601,121 @@ export function adapterFor(platform: string): PlatformAdapter | null {
  * means sent, where the post link is scoped, which paths are a login — is
  * checkable, and X is the one adapter whose behaviour must not drift.
  */
-export function composerConfigFor(platform: string): ComposerConfig | null {
-  return COMPOSERS[platform] ?? null;
+/**
+ * A network either has one composer, or one per device class.
+ *
+ * Instagram is why this exists. It does not restyle one composer for a phone —
+ * it serves a different flow, with different elements, different controls and
+ * different URLs. An adapter written against one cannot drive the other, and
+ * the thing that decides which arrives is the workspace's UA profile.
+ */
+/**
+ * Instagram has two composers, and the UA profile decides which one arrives.
+ *
+ * Both were driven against a real signed-in account on 2026-09-03.
+ *
+ * THE ROUTE FLOW is the one used for both classes now. It is reached by URL
+ * rather than by clicking the navigation, which is the whole point: the
+ * navigation is exactly what differs between a phone layout and a desktop one,
+ * and a flow that never touches it cannot be broken by that difference.
+ *
+ *   /create/select/   the file input is present immediately — no click at all
+ *   /create/style/    filters. Real <button> elements. "Next"
+ *   /create/details/  a <textarea> caption, and "Share"
+ *
+ * There is no `div[role="dialog"]` anywhere in it, and every control is a real
+ * `<button>` rather than a `div[role="button"]`. The screens announce
+ * themselves through the URL, which is the best signal available: not markup,
+ * not language, so it cannot drift with a class rename or a translation.
+ *
+ * THE DIALOG FLOW is what a desktop browser gets from the feed, and it is kept
+ * because it is verified and may be needed if the routes ever stop being
+ * addressable. Feed, click Create, then a dialog: Crop, Next, Edit, Next,
+ * caption, Share. Everything is dialog-scoped and every control is a
+ * `div[role="button"]` with obfuscated classes.
+ *
+ * WHAT IS NOT VERIFIED: both flows were driven under a *desktop* user agent.
+ * Nothing here has been run with a phone's UA, which is the case that started
+ * this — the operator's workspace runs the iPhone profile, Instagram served
+ * the mobile layout, and the desktop navigation selector had nothing to match.
+ * The route flow is assigned to `mobile` because it depends on no navigation,
+ * not because it has been watched working there. If it fails, the refusal now
+ * names the UA profile as the first thing to check.
+ */
+const INSTAGRAM_ROUTE_GRAPH: ComposerConfig = {
+  // No opener: the upload control is on the page when it loads.
+  fileInput: 'input[type="file"][accept*="image"]',
+  // Verified: one match, on the style screen, as an inline background.
+  mediaAttached: '[style*="blob:"]',
+  mediaRequired: true,
+  mediaFirst: true,
+  afterAttach: [
+    {
+      click: "button",
+      clickText: "Next",
+      // The URL is the proof. Locale-proof and markup-proof.
+      waitForPath: "/create/details",
+      label: "filter",
+    },
+  ],
+  // A textarea here, not a contenteditable — and its aria-label uses a real
+  // ellipsis ("Write a caption…"), which is why this matches a substring.
+  editor: 'textarea[aria-label*="aption"], div[contenteditable="true"][role="textbox"]',
+  editorKind: "textarea",
+  submit: "button",
+  submitText: "Share",
+  login: { selectors: 'input[name="password"]', pathPattern: "^/accounts/login" },
+  confirmation: {
+    // UNVERIFIED: no post has been put through either flow. Instagram defines
+    // no toast selector, so these are unreachable today and the flow falls
+    // back to the composer going away.
+    successText: "post shared|your post has been shared",
+    errorText: "went wrong|couldn't|could not|failed|try again",
+    stillComposingPath: "/create/",
+  },
+};
+
+type ComposerGraphs = ComposerConfig | Partial<Record<DeviceClass, ComposerConfig>>;
+
+const GRAPHS: Record<string, ComposerGraphs> = {
+  instagram: {
+    // Both classes drive the route flow: it needs no navigation, and the
+    // navigation is what differs between them. The dialog graph stays in
+    // COMPOSERS as the verified desktop fallback.
+    desktop: INSTAGRAM_ROUTE_GRAPH,
+    mobile: INSTAGRAM_ROUTE_GRAPH,
+  },
+};
+
+function isSingleGraph(graphs: ComposerGraphs): graphs is ComposerConfig {
+  return "submit" in graphs;
+}
+
+/**
+ * The composer graph for a network, as seen by a given device class.
+ *
+ * `device` defaults to desktop so every existing caller and test keeps its
+ * meaning; a network with a single graph ignores it entirely.
+ */
+export function composerConfigFor(
+  platform: string,
+  device: DeviceClass = "desktop",
+): ComposerConfig | null {
+  const graphs = GRAPHS[platform] ?? COMPOSERS[platform];
+  if (!graphs) return null;
+  if (isSingleGraph(graphs)) return graphs;
+  // A class with no graph of its own falls back to the desktop one rather than
+  // refusing: a wrong-shaped graph fails loudly at the first probe, which is a
+  // better outcome than a network becoming unpostable because a class is
+  // unmapped.
+  return graphs[device] ?? graphs.desktop ?? null;
+}
+
+/** Which device classes a network has a graph written specifically for. */
+export function graphedDeviceClasses(platform: string): DeviceClass[] {
+  const graphs = GRAPHS[platform];
+  if (!graphs || isSingleGraph(graphs)) return [];
+  return (Object.keys(graphs) as DeviceClass[]).filter((key) => graphs[key]);
 }
 
 export function knownPlatforms(): string[] {

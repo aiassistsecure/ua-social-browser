@@ -119,6 +119,15 @@ export type ComposerConfig = {
      * selecting on.
      */
     waitForHeading?: { selector: string; text: string };
+    /**
+     * A regex the URL path must match once this step has landed.
+     *
+     * The best signal of the three where a network has it, because it is
+     * neither markup nor language: Instagram's route flow walks
+     * `/create/select/` to `/create/style/` to `/create/details/`, and those
+     * cannot drift with a class rename or a translation.
+     */
+    waitForPath?: string;
     label: string;
   }>;
   login: { selectors?: string; pathPattern?: string };
@@ -157,6 +166,8 @@ export type ComposerPage = {
   present(selector: string): Promise<boolean>;
   /** True once `selector`'s text contains `text`, case-insensitively. */
   headingSays(selector: string, text: string): Promise<boolean>;
+  /** The page's current URL path. */
+  currentPath(): Promise<string>;
   enterText(text: string): Promise<{ ok: boolean; detail?: string }>;
   attachMedia(paths: string[]): Promise<{ ok: boolean; detail?: string }>;
   mediaReady(): Promise<boolean>;
@@ -199,6 +210,13 @@ export type ComposeFlowOptions = {
   deadline: number;
   allowHotkey: boolean;
   hasOpener: boolean;
+  /**
+   * The UA profile's name, named in the refusal when the composer cannot be
+   * opened. That failure is far more often the profile than a drifted
+   * selector: a workspace on a phone profile is served a different composer
+   * entirely, and the desktop graph has nothing to match.
+   */
+  profileName?: string;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 };
@@ -333,9 +351,12 @@ export async function runComposeFlow(
     // was three lines of ours. A refusal that misattributes the cause sends
     // the next person hunting in the wrong place.
     if (hasOpener && openerClicks === 0) {
+      const profile = options.profileName
+        ? ` This workspace is running the "${options.profileName}" profile; ${label} serves a different composer to a phone than to a desktop, so try a desktop profile before hunting for a selector.`
+        : ` ${label} serves a different composer to a phone than to a desktop, so check this workspace's UA profile before hunting for a selector.`;
       return {
         kind: "rejected",
-        detail: `Could not find anything on ${label} to open its composer with, so nothing was submitted. This build's selector for that control is out of date.`,
+        detail: `Could not find anything on ${label} to open its composer with, so nothing was submitted.${profile}`,
       };
     }
     return {
@@ -426,7 +447,7 @@ export async function runComposeFlow(
     // be checked, and it is better to say so than to report a success nobody
     // verified — Instagram's crop step used to wait for `div[role="dialog"]`,
     // which was already on screen, so it passed without proving anything.
-    if (!step.waitFor && !step.waitForHeading) {
+    if (!step.waitFor && !step.waitForHeading && !step.waitForPath) {
       return {
         kind: "rejected",
         detail: `This build cannot tell whether ${label} moved past its ${step.label} step, so nothing was submitted.`,
@@ -435,12 +456,16 @@ export async function runComposeFlow(
 
     let arrived = false;
     while (now() < preConfirmDeadline && !arrived) {
-      arrived = step.waitFor
-        ? await page.present(step.waitFor)
-        : await page.headingSays(
-            step.waitForHeading!.selector,
-            step.waitForHeading!.text,
-          );
+      if (step.waitForPath) {
+        arrived = new RegExp(step.waitForPath).test(await page.currentPath());
+      } else if (step.waitFor) {
+        arrived = await page.present(step.waitFor);
+      } else {
+        arrived = await page.headingSays(
+          step.waitForHeading!.selector,
+          step.waitForHeading!.text,
+        );
+      }
       if (!arrived) await sleep(POLL_MS);
     }
     if (!arrived) {
@@ -623,6 +648,10 @@ export function composerPage(contents: WebContents, config: ComposerConfig): Com
         },
         { selector, text },
       );
+    },
+
+    async currentPath() {
+      return runInPage<string>(contents, () => window.location.pathname, {});
     },
 
     async headingSays(selector: string, text: string) {

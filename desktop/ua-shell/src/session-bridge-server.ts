@@ -112,6 +112,17 @@ export type PublisherPort = {
    * involve a second factor, so nothing here waits on it.
    */
   beginSignIn(workspaceId: string, platform?: string): Promise<SignInInvitation>;
+  /**
+   * Destroys one network's session inside the workspace, and verifies it.
+   *
+   * `signedOut` is the answer of a fresh session read, not of the removal
+   * loop. A sign-out that reports success without checking is the same class
+   * of claim as a post reported without confirmation.
+   */
+  signOut(
+    workspaceId: string,
+    platform?: string,
+  ): Promise<{ signedOut: boolean; detail: string }>;
 };
 
 export type BridgeLogger = {
@@ -310,6 +321,45 @@ export async function startSessionBridge(options: {
         accountHandle: snapshot.accountHandle,
         detail: snapshot.detail,
       });
+      return;
+    }
+
+    const signOutMatch = /^\/signout\/(.+)$/.exec(path);
+    if (request.method === "POST" && signOutMatch) {
+      const workspaceId = decodeURIComponent(signOutMatch[1] as string);
+
+      // Same rule as sign-in: an unreadable body is refused rather than
+      // treated as "no platform". Signing the wrong network out of a
+      // workspace destroys a session the operator did not ask to lose.
+      let platform: string | undefined;
+      try {
+        const text = await readBody(request);
+        if (text.trim() !== "") {
+          const parsed: unknown = JSON.parse(text);
+          const raw = (parsed as { platform?: unknown } | null)?.platform;
+          platform = typeof raw === "string" && raw.trim() !== "" ? raw.trim() : undefined;
+        }
+      } catch (error) {
+        sendJson(response, 400, {
+          detail:
+            error instanceof Error
+              ? `Unreadable sign-out request: ${error.message}`
+              : "Unreadable sign-out request",
+        });
+        return;
+      }
+
+      const outcome = await publisher.signOut(workspaceId, platform);
+
+      logger?.info("Sign-out requested", {
+        workspaceId,
+        platform: platform ?? "(workspace default)",
+        signedOut: outcome.signedOut,
+      });
+
+      // 200 either way: the shell did the work and is reporting what it found.
+      // A failed sign-out is an answer, not a transport error.
+      sendJson(response, 200, outcome);
       return;
     }
 

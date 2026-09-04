@@ -88,3 +88,44 @@ input path can produce a handle from anything but a page read.
 
 The handle selectors are product knowledge and unverified. A miss must be
 "unknown", never a wrong name — that is the whole point.
+
+## Signing out, and why the Accounts page was dangerous without it
+
+The trash icon on the Accounts page (`aria-label` was "Remove account") used
+to run exactly this:
+
+    accounts: current.accounts.filter((item) => item.id !== accountId)
+
+Nothing in the codebase could remove a cookie at all — no `clearStorageData`,
+no `cookies.remove`. So the row went and the session stayed.
+
+The full mechanism the owner hit, 2026-09-04:
+
+1. Trash the account. The label goes; the jar is untouched.
+2. Add an account with a different handle. `addAccount` writes the row with
+   `connected: false` and **immediately calls `startSignIn`**.
+3. The login page opens in a workspace whose jar still holds the previous
+   account's cookies — so the network redirects straight to the feed, already
+   signed in.
+4. The session check answers `authenticated` (true of the jar), and the *new*
+   label lights up "Signed in".
+
+The new name inherits the old account's session end to end. And because a
+draft carries a workspace and a platform but **no account**, publishing goes
+through that jar: an approved post would have gone out from whoever was
+actually in it.
+
+`publisher/sign-out.ts` + `POST /api/session/signout` fix the capability; the
+trash icon now signs out first and removes the label **only if the sign-out
+verified**. A failed sign-out that still forgot the label would leave no row
+and a live session, which is worse than either problem alone. Because it is
+destructive — a real re-login, possibly with a second factor — it confirms
+first, and the dialog says which network and which workspace.
+
+**Still true and still worth fixing:** `account.connected` is a stored boolean
+written at some past check, not the live session, and adding an account into a
+workspace that already holds a session for that network silently inherits it
+rather than warning. The structural answer is to give drafts an account and
+refuse to publish when the signed-in handle does not match the approved one —
+that is the only version where wrong-account publishing is impossible rather
+than merely less likely.

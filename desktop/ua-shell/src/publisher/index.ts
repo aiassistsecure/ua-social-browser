@@ -28,6 +28,7 @@ import { adapterFor, type PlatformAdapter } from "./adapters";
 import { resolveApprovedMedia } from "./approved-media";
 import { parseAccountId, resolveIdentity } from "./identity";
 import { deviceClassFor } from "./device";
+import { clearNetworkCookies, describeSignOut } from "./sign-out";
 import {
   createIdentityCache,
   identityCacheKey,
@@ -594,5 +595,75 @@ export function createPublisher(deps: {
     );
   }
 
-  return { sessionStatus, publish, beginSignIn };
+  /**
+   * Destroys one network's session inside a workspace.
+   *
+   * The counterpart to `beginSignIn`, and the thing whose absence meant
+   * "removing" an account only removed a label while the cookie jar — and
+   * therefore the account a post would go out from — stayed exactly as it was.
+   *
+   * Scoped to the network's own origin so a workspace holding several accounts
+   * does not lose all of them at once, and **verified**: the session is read
+   * back afterwards, and success is whatever that read says rather than
+   * whatever the removal loop hoped.
+   */
+  async function signOut(
+    workspaceId: string,
+    platform?: string,
+  ): Promise<{ signedOut: boolean; detail: string }> {
+    const entry = await directory.resolve(workspaceId);
+    if (!entry) {
+      return {
+        signedOut: false,
+        detail: `The shell does not know a workspace called "${workspaceId}".`,
+      };
+    }
+
+    const wanted = platform ?? entry.platform;
+    const adapter = adapterFor(wanted);
+    if (!adapter) {
+      return {
+        signedOut: false,
+        detail: `No adapter for ${wanted}; this shell does not know where that network keeps its session.`,
+      };
+    }
+
+    const context = contextFor(identityForEntry(entry));
+
+    try {
+      const report = await clearNetworkCookies(adapter.origin, {
+        cookiesFor: (url) => context.cookies.get({ url }),
+        remove: (url, name) => context.cookies.remove(url, name),
+      });
+
+      // The remembered handle belongs to an account that may no longer be
+      // here. Drop it before the check, so the check cannot read a cached one.
+      handles.invalidate(identityCacheKey(entry.id, adapter.platform));
+
+      // The only thing that decides success.
+      const after = await signedIn(entry, adapter);
+      const outcome = describeSignOut(adapter.label, report, after.authenticated);
+
+      log.info("Sign-out attempted", {
+        workspaceId,
+        platform: adapter.platform,
+        found: report.found,
+        removed: report.removed,
+        failed: report.failed.length,
+        signedOut: outcome.signedOut,
+      });
+
+      return outcome;
+    } catch (error) {
+      log.error("Sign-out failed", { workspaceId, ...errorFields(error) });
+      return {
+        signedOut: false,
+        detail: `Could not sign this workspace out of ${adapter.label}: ${
+          error instanceof Error ? error.message : String(error)
+        }. Treat the account as still signed in.`,
+      };
+    }
+  }
+
+  return { sessionStatus, publish, beginSignIn, signOut };
 }

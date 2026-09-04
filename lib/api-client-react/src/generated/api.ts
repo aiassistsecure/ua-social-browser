@@ -30,6 +30,8 @@ import type {
   SessionStatus,
   SignInInvitation,
   SignInRequest,
+  SignOutRequest,
+  SignOutResult,
   TenantInfo,
   UploadedMedia
 } from './api.schemas';
@@ -292,6 +294,78 @@ export const useBeginSignIn = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getBeginSignInMutationOptions(options));
+    }
+
+export const getSignOutOfSessionUrl = () => {
+
+
+
+
+  return `/api/session/signout`
+}
+
+/**
+ * Removes the cookies this workspace holds for one network, then reads the session back and reports what that read said. Scoped to a single network because a workspace may hold accounts on several and each is its own session. `signedOut` is the answer of the verification, never of the removal itself: a sign-out reported without checking is the same class of claim as a post reported without confirmation. A session kept outside cookies (Bluesky and Mastodon use local storage) is reported as not signed out, with a reason.
+ * @summary Destroy one network's session inside a workspace
+ */
+export const signOutOfSession = async (signOutRequest: SignOutRequest, options?: Parameters<typeof customFetch>[1]): Promise<SignOutResult> => {
+
+  return customFetch<SignOutResult>(getSignOutOfSessionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(signOutRequest)
+  }
+);}
+
+
+
+
+
+export const getSignOutOfSessionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof signOutOfSession>>, TError,{data: BodyType<SignOutRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof signOutOfSession>>, TError,{data: BodyType<SignOutRequest>}, TContext> => {
+
+const mutationKey = ['signOutOfSession'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof signOutOfSession>>, {data: BodyType<SignOutRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  signOutOfSession(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SignOutOfSessionMutationResult = NonNullable<Awaited<ReturnType<typeof signOutOfSession>>>
+    export type SignOutOfSessionMutationBody = BodyType<SignOutRequest>
+    export type SignOutOfSessionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Destroy one network's session inside a workspace
+ */
+export const useSignOutOfSession = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof signOutOfSession>>, TError,{data: BodyType<SignOutRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof signOutOfSession>>,
+        TError,
+        {data: BodyType<SignOutRequest>},
+        TContext
+      > => {
+      return useMutation(getSignOutOfSessionMutationOptions(options));
     }
 
 export const getPublishPostUrl = () => {

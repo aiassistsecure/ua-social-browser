@@ -52,6 +52,12 @@ const stub: PublisherPort = {
     signInCalls.push({ workspaceId, platform });
     return nextSignIn;
   },
+  async signOut() {
+    // Nothing in these suites exercises a sign-out; the port
+    // requires it, and a fake that lies about succeeding would be
+    // worse than one that plainly refuses.
+    return { signedOut: false, detail: "not exercised by this test" };
+  },
 };
 
 let bridge: SessionBridgeHandle;

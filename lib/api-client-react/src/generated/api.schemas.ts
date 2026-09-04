@@ -147,6 +147,19 @@ export interface SessionStatus {
   detail: string;
 }
 
+export interface SignOutRequest {
+  workspaceId: string;
+  /** Which network to sign out of inside this workspace. Defaults to the workspace's own platform. Only this network's cookies are removed — other accounts in the same workspace keep their sessions. */
+  platform?: string;
+}
+
+export interface SignOutResult {
+  /** Whether the session reads signed out *after* the attempt. False means the account is still usable and must not be treated as gone. */
+  signedOut: boolean;
+  /** Shown to the operator verbatim. */
+  detail: string;
+}
+
 export interface SignInRequest {
   workspaceId: string;
   /** Which network to sign in to inside this workspace. Defaults to the workspace's own platform. The login page always opens in this workspace's tab, under its isolated session and UA profile. */

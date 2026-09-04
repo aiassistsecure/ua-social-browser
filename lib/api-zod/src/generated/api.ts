@@ -57,6 +57,21 @@ export const BeginSignInResponse = zod.object({
 
 
 /**
+ * Removes the cookies this workspace holds for one network, then reads the session back and reports what that read said. Scoped to a single network because a workspace may hold accounts on several and each is its own session. `signedOut` is the answer of the verification, never of the removal itself: a sign-out reported without checking is the same class of claim as a post reported without confirmation. A session kept outside cookies (Bluesky and Mastodon use local storage) is reported as not signed out, with a reason.
+ * @summary Destroy one network's session inside a workspace
+ */
+export const SignOutOfSessionBody = zod.object({
+  "workspaceId": zod.string(),
+  "platform": zod.string().optional().describe('Which network to sign out of inside this workspace. Defaults to the workspace\'s own platform. Only this network\'s cookies are removed — other accounts in the same workspace keep their sessions.')
+})
+
+export const SignOutOfSessionResponse = zod.object({
+  "signedOut": zod.boolean().describe('Whether the session reads signed out \*after\* the attempt. False means the account is still usable and must not be treated as gone.'),
+  "detail": zod.string().describe('Shown to the operator verbatim.')
+})
+
+
+/**
  * Submits an already human-approved post through the browser session that belongs to the workspace. The request is rejected unless an explicit human approval is attached. Requires the native session bridge; there is no server-side fallback that posts on the user's behalf.
  * @summary Post approved content through the workspace's authenticated session
  */

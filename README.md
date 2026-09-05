@@ -113,8 +113,10 @@ Adding one means: an entry in the platform registry, an adapter in the shell, th
 
 What the shell can *drive* differs by network, and it says which rather than answering everything with a shrug:
 
-- **Driven end to end** — X (its own bespoke adapter), LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr. The shell opens the composer inside the workspace's own session, types the approved text, submits, and waits for the network's own confirmation.
-- **Refused, with the actual reason** — Instagram, TikTok, YouTube and Pinterest want an image or video, and an approved draft carries text; Reddit needs a community and a title the draft model does not have. Those answer with that specific reason and a link to post in the tab. The draft stays approved either way.
+- **Driven end to end** — X (its own bespoke adapter, verified with a real post on a real account on 2026-09-02), LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr, and — upload-first, with the picture going in before the caption — Instagram and Pinterest. The shell opens the composer inside the workspace's own session, types the approved text, submits, and waits for the network's own confirmation.
+- **Refused, with the actual reason** — TikTok and YouTube need a video and an upload wizard this build does not drive; Reddit needs a community and a title the draft model does not have. Those answer with that specific reason and a link to post in the tab. The draft stays approved either way.
+
+Posts can carry images and video on the driven networks. The file is stored under the data directory, addressed by the hash of its own contents, and the draft carries only a reference — so the ledger never swells by the size of a photo. That hash is also what the shell re-checks immediately before uploading: an approval is for exact content, and content includes the picture.
 
 ## Signing in (FaceMask)
 
@@ -138,7 +140,7 @@ Full deployment and packaging notes, including the session-bridge HTTP contract,
 
 ## Status
 
-Working: workspace isolation, UA profiles, live in-shell sign-in, the AI composer, the approval gate, scheduled dispatch, the ledger, and the twelve platform adapters.
+Working: workspace isolation, UA profiles, live in-shell sign-in, the AI composer, the approval gate, scheduled dispatch, the ledger, and the twelve platform adapters. The X adapter has been verified end to end: on 2026-09-02 a real post left the macOS shell from the operator's own signed-in session, X confirmed it, and the review queue showed it as posted with a working link to the live status.
 
 Not there yet: signed installers for each OS, and per-tab UA switching (it is per-workspace today).
 

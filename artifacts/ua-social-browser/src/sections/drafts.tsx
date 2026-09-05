@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BadgeCheck,
   CalendarClock,
   ExternalLink,
+  ImagePlus,
   Loader2,
   RotateCcw,
   Send,
   Trash2,
+  X as XIcon,
 } from 'lucide-react';
 import { usePublishPost } from '@workspace/api-client-react';
 import type { PublishRequestPlatform } from '@workspace/api-client-react';
@@ -31,6 +33,17 @@ import {
 } from '@/components/ui/alert-dialog';
 import { PlatformGlyph } from '@/components/app/platform-glyph';
 import { useToast } from '@/hooks/use-toast';
+import { approverName, recordedApproval } from '@/lib/approver';
+import { attest, describeAttestation, isRefusal, retract } from '@/lib/attestation';
+import {
+  MEDIA_ACCEPT_ATTRIBUTE,
+  formatBytes,
+  mediaFingerprint,
+  mediaUrl,
+  refuseAttachment,
+  uploadMedia,
+} from '@/lib/media';
+import { draggingFiles, leftTheCard } from '@/lib/drop';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import { platformProfile } from '@/lib/platforms';
@@ -42,7 +55,7 @@ import {
   relativeTime,
   toLocalInputValue,
 } from '@/lib/workspace';
-import type { Draft, DraftStatus } from '@/types';
+import type { Draft, DraftMedia, DraftStatus } from '@/types';
 
 type Filter = 'all' | 'pending' | 'approved' | 'published';
 
@@ -60,6 +73,10 @@ const STATUS_STYLE: Record<DraftStatus, string> = {
   publishing: 'border-chart-3/50 text-chart-3',
   published: 'border-chart-2/50 text-chart-2',
   failed: 'border-destructive/50 text-destructive',
+  // Deliberately not the `published` green. The post is out, but on the
+  // operator's word rather than the network's, and the badge should not look
+  // like a confirmation.
+  attested: 'border-chart-4/50 text-chart-4',
 };
 
 const STATUS_LABEL: Record<DraftStatus, string> = {
@@ -69,6 +86,9 @@ const STATUS_LABEL: Record<DraftStatus, string> = {
   publishing: 'Posting',
   published: 'Posted',
   failed: 'Failed',
+  // Names the source of the claim. "Posted" on its own would be the exact
+  // conflation this status exists to prevent.
+  attested: 'Posted · your word',
 };
 
 function matchesFilter(draft: Draft, filter: Filter): boolean {
@@ -80,7 +100,10 @@ function matchesFilter(draft: Draft, filter: Filter): boolean {
     case 'approved':
       return draft.status === 'approved' || draft.status === 'scheduled';
     case 'published':
-      return draft.status === 'published';
+      // An attested post is a post, as far as the operator is concerned — this
+      // is where they will look for it. The badge on the card is what keeps the
+      // network's confirmation and the operator's word distinguishable.
+      return draft.status === 'published' || draft.status === 'attested';
   }
 }
 
@@ -101,6 +124,7 @@ export function Drafts({
   state,
   updateState,
   workspace,
+  onNavigate,
   focusedDraftId,
   onFocusHandled,
 }: SectionProps & {
@@ -112,11 +136,29 @@ export function Drafts({
   const [filter, setFilter] = useState<Filter>('all');
   const [pendingPublish, setPendingPublish] = useState<Draft | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  /**
+   * Which card a file is currently hovering over.
+   *
+   * One id rather than a boolean per card: only one thing can be dragged at a
+   * time, so this cannot get out of step with itself.
+   */
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  /** The failed post the operator is correcting, and the link they are giving. */
+  const [attesting, setAttesting] = useState<Draft | null>(null);
+  const [attestedUrl, setAttestedUrl] = useState('');
+  const fileInputPrefix = useId();
   const publishPost = usePublishPost();
 
-  const operator = state.settings.operatorName.trim() || 'Operator';
+  // Whoever is named here is who the ledger says signed. There is no fallback
+  // name: an approval recorded under a placeholder is a false statement about
+  // who agreed to publish, and the record cannot be corrected afterwards.
+  const operator = approverName(state.settings.operatorName);
   const drafts = draftsForWorkspace(state, workspace.id).filter((draft) =>
     matchesFilter(draft, filter),
+  );
+  const awaitingReview = drafts.some(
+    (draft) => draft.status === 'draft' || draft.status === 'failed',
   );
 
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
@@ -155,6 +197,15 @@ export function Drafts({
   }
 
   function approve(draft: Draft) {
+    if (operator === null) {
+      toast({
+        title: 'Say who is approving',
+        description:
+          'Approvals are recorded under your name. Add it under Settings › Approver name, then approve.',
+        variant: 'destructive',
+      });
+      return;
+    }
     patchDraft(draft.id, {
       status: draft.scheduledFor ? 'scheduled' : 'approved',
       approvedBy: operator,
@@ -178,6 +229,145 @@ export function Drafts({
       approvedAt: null,
       scheduledFor: null,
     });
+  }
+
+  /**
+   * Records the operator's own account of a post the network never confirmed.
+   *
+   * The rules live in `lib/attestation.ts`; this only carries the answer into
+   * state and says plainly when the module refuses.
+   */
+  function confirmAttestation(draft: Draft) {
+    const result = attest({
+      draft,
+      by: operator,
+      at: new Date().toISOString(),
+      postUrl: attestedUrl,
+    });
+
+    if (isRefusal(result)) {
+      toast({
+        title: 'Not recorded',
+        description: result.refused,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    patchDraft(draft.id, result);
+    updateState((current) => ({
+      ...current,
+      activity: logActivity(current, {
+        type: 'draft',
+        title: 'Corrected by a human',
+        detail: `${platformProfile(draft.platform).label} · ${operator} confirmed it posted`,
+      }),
+    }));
+    setAttesting(null);
+    setAttestedUrl('');
+  }
+
+  /** Puts the record back to what the machine observed. */
+  function retractAttestation(draft: Draft) {
+    const result = retract(draft);
+    if (isRefusal(result)) {
+      toast({ title: 'Nothing to take back', description: result.refused });
+      return;
+    }
+    patchDraft(draft.id, result);
+    updateState((current) => ({
+      ...current,
+      activity: logActivity(current, {
+        type: 'draft',
+        title: 'Correction withdrawn',
+        detail: `${platformProfile(draft.platform).label} · back to what the shell saw`,
+      }),
+    }));
+  }
+
+  /**
+   * Attaching or removing a picture is editing the post.
+   *
+   * The sign-off is on the exact content, and content includes what is being
+   * shown — the API server checks the attachments against the approval before
+   * it sends, so a change here that kept its approval would simply be refused
+   * later, with the operator wondering why.
+   */
+  function setMedia(draft: Draft, media: DraftMedia[]) {
+    const changed = mediaFingerprint(draft.media) !== mediaFingerprint(media);
+    const approved = Boolean(draft.approvedAt);
+    patchDraft(draft.id, {
+      media,
+      ...(changed && approved && draft.status !== 'published'
+        ? { status: 'draft' as const, approvedBy: null, approvedAt: null }
+        : {}),
+    });
+  }
+
+  async function attachFiles(draft: Draft, files: FileList | null) {
+    if (!files || files.length === 0) return;
+
+    setUploadingId(draft.id);
+    // Read from the draft as it was, then apply once: each upload awaits, and
+    // reading `draft.media` again between them would drop everything attached
+    // since this handler started.
+    const attached: DraftMedia[] = [...draft.media];
+
+    try {
+      for (const file of Array.from(files)) {
+        const refusal = refuseAttachment({
+          platform: draft.platform,
+          existing: attached,
+          file,
+        });
+        if (refusal) {
+          toast({
+            title: 'Not attached',
+            description: refusal.reason,
+            variant: 'destructive',
+          });
+          continue;
+        }
+
+        try {
+          attached.push(await uploadMedia(file));
+        } catch (error) {
+          toast({
+            title: 'Not attached',
+            description:
+              error instanceof Error ? error.message : `${file.name} could not be stored.`,
+            variant: 'destructive',
+          });
+        }
+      }
+
+      if (mediaFingerprint(attached) !== mediaFingerprint(draft.media)) {
+        setMedia(draft, attached);
+      }
+    } finally {
+      setUploadingId(null);
+    }
+  }
+
+  function onDragOver(draft: Draft, event: React.DragEvent) {
+    if (!draggingFiles(event.dataTransfer.types)) return;
+    // Without this the drop never fires: the default action for a dragged file
+    // is to navigate to it, and preventing it here is what marks the element
+    // as a valid target.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    if (dropTargetId !== draft.id) setDropTargetId(draft.id);
+  }
+
+  function onDragLeave(draft: Draft, event: React.DragEvent) {
+    if (!leftTheCard(event.currentTarget, event.relatedTarget as Node | null)) return;
+    if (dropTargetId === draft.id) setDropTargetId(null);
+  }
+
+  function onDrop(draft: Draft, event: React.DragEvent) {
+    event.preventDefault();
+    setDropTargetId(null);
+    void attachFiles(draft, event.dataTransfer.files);
   }
 
   function removeDraft(draft: Draft) {
@@ -227,7 +417,18 @@ export function Drafts({
   }
 
   function requestPublish(draft: Draft) {
-    if (!draft.approvedAt) {
+    // The composer refuses this too, but finding out after a window has opened
+    // and a network has been driven is a slow way to learn something the app
+    // already knew.
+    if (platformProfile(draft.platform).requiresMedia && draft.media.length === 0) {
+      toast({
+        title: 'Needs a picture',
+        description: `${platformProfile(draft.platform).label} does not take a post without an image or video. Attach one and approve it again.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (recordedApproval(draft) === null) {
       toast({
         title: 'Approval required',
         description: 'A person has to sign off before anything reaches the network.',
@@ -244,6 +445,18 @@ export function Drafts({
 
   async function send(draft: Draft) {
     setPendingPublish(null);
+    // The approval sent is the one a person recorded, verbatim. If half of it
+    // is missing the draft was never properly approved, and inventing the
+    // other half here would be the app signing on someone's behalf.
+    const approval = recordedApproval(draft);
+    if (approval === null) {
+      toast({
+        title: 'Approval required',
+        description: 'A person has to sign off before anything reaches the network.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setSendingId(draft.id);
     patchDraft(draft.id, { status: 'publishing', lastError: null });
 
@@ -254,10 +467,10 @@ export function Drafts({
           draftId: draft.id,
           platform: draft.platform as PublishRequestPlatform,
           body: draft.body,
-          approval: {
-            approvedBy: draft.approvedBy ?? operator,
-            approvedAt: draft.approvedAt ?? new Date().toISOString(),
-          },
+          // Sent as recorded. The server compares this against the approved
+          // draft and refuses a mismatch, the same way it does for the text.
+          media: draft.media,
+          approval,
           // No idempotency key: the server derives it from the stored draft and
           // its approval, and refuses a different one. Sending our own could
           // only ever disagree with the record and be refused.
@@ -327,10 +540,38 @@ export function Drafts({
         </div>
       }
     >
+      {operator === null && awaitingReview ? (
+        <Card
+          className="border-chart-4/50 bg-chart-4/10"
+          data-testid="notice-approver-missing"
+        >
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-chart-4" />
+              <span>
+                Nothing can be approved until the app knows who is approving.
+                Every sign-off is recorded under that name and sent with the
+                post.
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onNavigate('settings')}
+              data-testid="button-set-approver"
+            >
+              Set your approver name
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {drafts.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="p-10 text-center text-sm text-muted-foreground">
-            Nothing in this view yet.
+            {filter === 'all'
+              ? 'No posts in this workspace yet. Draft one in the AI Composer, or write your own on the Network page, and it lands here for review.'
+              : 'Nothing in this view yet.'}
           </CardContent>
         </Card>
       ) : (
@@ -342,6 +583,8 @@ export function Drafts({
               draft.status === 'published' || draft.status === 'publishing';
             const isSending = sendingId === draft.id;
             const approved = Boolean(draft.approvedAt);
+            const needsMedia = network.requiresMedia && draft.media.length === 0;
+            const isDropTarget = dropTargetId === draft.id;
             // No time set is not an unfinished schedule — it is the normal
             // case: it goes out when a person presses Post.
             const immediate = draft.scheduledFor === null;
@@ -354,11 +597,33 @@ export function Drafts({
                   else cardRefs.current.delete(draft.id);
                 }}
                 className={cn(
+                  'relative transition-colors',
                   focusedDraftId === draft.id &&
                     'ring-2 ring-primary ring-offset-2 ring-offset-background',
+                  isDropTarget && 'ring-2 ring-primary border-primary',
                 )}
+                // The whole card is the target, not a small strip inside it —
+                // a drop zone you have to aim for is worse than a button.
+                {...(locked
+                  ? {}
+                  : {
+                      onDragOver: (event: React.DragEvent) => onDragOver(draft, event),
+                      onDragLeave: (event: React.DragEvent) => onDragLeave(draft, event),
+                      onDrop: (event: React.DragEvent) => onDrop(draft, event),
+                    })}
                 data-testid={`draft-${draft.id}`}
               >
+                {isDropTarget ? (
+                  <div
+                    className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-background/85"
+                    data-testid={`dropzone-${draft.id}`}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-medium text-primary">
+                      <ImagePlus className="h-4 w-4" />
+                      Drop to attach to this post
+                    </span>
+                  </div>
+                ) : null}
                 <CardContent className="space-y-3 p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <PlatformGlyph platform={draft.platform} tinted />
@@ -402,13 +667,183 @@ export function Drafts({
                     data-testid={`input-body-${draft.id}`}
                   />
 
+                  <div className="space-y-2">
+                    {draft.media.length > 0 ? (
+                      <div className="flex flex-wrap gap-3">
+                        {draft.media.map((item) => (
+                          <div
+                            key={item.id}
+                            className="w-44 space-y-1.5 rounded-md border border-border p-2"
+                            data-testid={`media-${draft.id}-${item.sha256.slice(0, 8)}`}
+                          >
+                            <div className="relative">
+                              {item.mimeType.startsWith('video/') ? (
+                                <video
+                                  src={mediaUrl(item)}
+                                  className="h-24 w-full rounded object-cover"
+                                  muted
+                                />
+                              ) : (
+                                <img
+                                  src={mediaUrl(item)}
+                                  alt={item.altText || item.filename}
+                                  className="h-24 w-full rounded object-cover"
+                                />
+                              )}
+                              {!locked ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMedia(
+                                      draft,
+                                      draft.media.filter((other) => other.id !== item.id),
+                                    )
+                                  }
+                                  className="absolute right-1 top-1 rounded-full bg-background/90 p-1 hover-elevate"
+                                  aria-label={`Remove ${item.filename}`}
+                                  data-testid={`button-remove-media-${draft.id}-${item.sha256.slice(0, 8)}`}
+                                >
+                                  <XIcon className="h-3 w-3" />
+                                </button>
+                              ) : null}
+                            </div>
+                            <p className="truncate text-[11px] text-muted-foreground" title={item.filename}>
+                              {item.filename} · {formatBytes(item.bytes)}
+                            </p>
+                            {network.supportsAltText ? (
+                              <Input
+                                value={item.altText ?? ''}
+                                readOnly={locked}
+                                placeholder="Describe it"
+                                onChange={(event) =>
+                                  setMedia(
+                                    draft,
+                                    draft.media.map((other) =>
+                                      other.id === item.id
+                                        ? { ...other, altText: event.target.value }
+                                        : other,
+                                    ),
+                                  )
+                                }
+                                className="h-7 text-xs"
+                                aria-label={`Alt text for ${item.filename}`}
+                                data-testid={`input-alt-${draft.id}-${item.sha256.slice(0, 8)}`}
+                              />
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {!locked ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          id={`${fileInputPrefix}-${draft.id}`}
+                          type="file"
+                          multiple
+                          accept={MEDIA_ACCEPT_ATTRIBUTE}
+                          className="hidden"
+                          onChange={(event) => {
+                            void attachFiles(draft, event.target.files);
+                            // Cleared so re-picking the same file still fires.
+                            event.target.value = '';
+                          }}
+                          data-testid={`input-media-${draft.id}`}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          asChild
+                          disabled={uploadingId === draft.id}
+                        >
+                          <label
+                            htmlFor={`${fileInputPrefix}-${draft.id}`}
+                            className="cursor-pointer"
+                            data-testid={`button-attach-${draft.id}`}
+                          >
+                            {uploadingId === draft.id ? (
+                              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <ImagePlus className="mr-2 h-3.5 w-3.5" />
+                            )}
+                            {uploadingId === draft.id ? 'Storing' : 'Attach'}
+                          </label>
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          {draft.media.length}/{network.mediaLimit}
+                          {network.requiresMedia && draft.media.length === 0
+                            ? ` · ${network.label} needs one`
+                            : ''}
+                          {approved && draft.media.length > 0
+                            ? ' · changing these clears the approval'
+                            : ''}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+
                   {draft.status === 'failed' && draft.lastError ? (
                     <div
-                      className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                      className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
                       data-testid={`error-${draft.id}`}
                     >
-                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span>{draft.lastError}</span>
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{draft.lastError}</span>
+                      </div>
+                      {/*
+                        The operator can see the account; this app cannot. When
+                        they have looked and the post is there, the record needs
+                        a way to say so — see `lib/attestation.ts` for why that
+                        is `attested` and never `published`.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => setAttesting(draft)}
+                        className="text-xs underline underline-offset-2"
+                        data-testid={`button-attest-${draft.id}`}
+                      >
+                        Checked the account — it actually posted
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {draft.status === 'attested' && draft.attestation ? (
+                    <div
+                      className="space-y-2 rounded-md border border-chart-4/40 bg-chart-4/10 p-3 text-sm text-chart-4"
+                      data-testid={`attested-${draft.id}`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{describeAttestation(draft)}</span>
+                      </div>
+                      {draft.lastError ? (
+                        <p className="text-xs opacity-80">
+                          What the shell saw at the time: {draft.lastError}
+                        </p>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-3">
+                        {draft.attestation.postUrl ? (
+                          <a
+                            href={draft.attestation.postUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 text-xs underline underline-offset-2"
+                            data-testid={`link-attested-${draft.id}`}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            The link you gave
+                          </a>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => retractAttestation(draft)}
+                          className="text-xs underline underline-offset-2"
+                          data-testid={`button-retract-${draft.id}`}
+                        >
+                          Take that back
+                        </button>
+                      </div>
                     </div>
                   ) : null}
 
@@ -496,7 +931,12 @@ export function Drafts({
                       {!approved && draft.status !== 'published' ? (
                         <Button
                           size="sm"
-                          disabled={overLimit || locked}
+                          disabled={overLimit || locked || operator === null}
+                          title={
+                            operator === null
+                              ? 'Set your approver name in Settings first'
+                              : undefined
+                          }
                           onClick={() => approve(draft)}
                           data-testid={`button-approve-${draft.id}`}
                         >
@@ -519,7 +959,12 @@ export function Drafts({
                           </Button>
                           <Button
                             size="sm"
-                            disabled={overLimit || isSending}
+                            disabled={overLimit || isSending || needsMedia}
+                            title={
+                              needsMedia
+                                ? `${network.label} needs an image or video`
+                                : undefined
+                            }
                             onClick={() => requestPublish(draft)}
                             data-testid={`button-publish-${draft.id}`}
                           >
@@ -569,6 +1014,59 @@ export function Drafts({
         </div>
       )}
 
+      {/*
+        Correcting the record. The dialog exists rather than a bare button
+        because this is a claim recorded under someone's name, and it should
+        take a deliberate act — and because the link is worth asking for while
+        the operator is already looking at the post.
+      */}
+      <AlertDialog
+        open={attesting !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAttesting(null);
+            setAttestedUrl('');
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>This one actually posted?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {operator === null
+                ? 'Corrections are recorded under your name. Add it under Settings › Approver name first.'
+                : `The network never confirmed this, so the shell recorded it as failed. Recording it as posted on your word keeps both facts: what the shell saw, and what ${operator} found on the account. It will never read as confirmed by the network.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="attested-url">Link to the post (optional)</Label>
+            <Input
+              id="attested-url"
+              value={attestedUrl}
+              onChange={(event) => setAttestedUrl(event.target.value)}
+              placeholder="https://…"
+              data-testid="input-attested-url"
+            />
+            <p className="text-xs text-muted-foreground">
+              Not required — your word stands either way. It is the difference
+              between a claim and one anyone can check.
+            </p>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-attest">
+              Never mind
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={operator === null}
+              onClick={() => attesting && confirmAttestation(attesting)}
+              data-testid="button-confirm-attest"
+            >
+              Record that it posted
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog
         open={pendingPublish !== null}
         onOpenChange={(open) => {
@@ -586,8 +1084,8 @@ export function Drafts({
             </AlertDialogTitle>
             <AlertDialogDescription>
               This sends the post through your signed-in session in this
-              workspace, under {pendingPublish?.approvedBy ?? operator}'s
-              approval. It becomes public immediately.
+              workspace, under {pendingPublish?.approvedBy}'s approval. It
+              becomes public immediately.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

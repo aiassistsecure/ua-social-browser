@@ -4,6 +4,8 @@ import {
   BeginSignInResponse,
   GetSessionStatusResponse,
   PublishPostBody,
+  SignOutOfSessionBody,
+  SignOutOfSessionResponse,
 } from "@workspace/api-zod";
 import { readBrowserState } from "../lib/browser-store";
 import { releaseClaim, takeClaim } from "../lib/dispatch-claims";
@@ -11,7 +13,8 @@ import {
   dispatchApprovedPost,
   idempotencyKeyFor,
 } from "../lib/publish-dispatch";
-import { beginSignIn, readSessionStatus } from "../lib/session-bridge";
+import { mediaFingerprint, type MediaRef } from "../lib/media-store";
+import { beginSignIn, readSessionStatus, signOutOfSession } from "../lib/session-bridge";
 import { asStoredDraft, type StoredDraft } from "../lib/stored-draft";
 import { tenantOrUnauthorized } from "../lib/tenant";
 
@@ -51,6 +54,7 @@ function verifyApproval(
     draftId: string;
     platform: string;
     body: string;
+    media?: MediaRef[];
     approval: { approvedBy: string; approvedAt: string };
   },
 ): ApprovalCheck {
@@ -103,6 +107,18 @@ function verifyApproval(
       ok: false,
       detail:
         "The submitted text does not match the approved draft. Approve the edited version first.",
+    };
+  }
+
+  // An approval covers the pictures as much as the words. Without this an
+  // approved draft id would be a licence to post any image, which is the same
+  // hole the body check above exists to close — and alt text is published
+  // content too, so a changed description is a changed post.
+  if (mediaFingerprint(draft.media) !== mediaFingerprint(input.media)) {
+    return {
+      ok: false,
+      detail:
+        "The submitted attachments do not match the approved draft. Approve the edited version first.",
     };
   }
 
@@ -166,6 +182,36 @@ router.post("/session/signin", async (req, res) => {
   return res.json(BeginSignInResponse.parse(invitation));
 });
 
+/**
+ * Sign-out.
+ *
+ * Destroys one network's session inside a workspace and reports what the
+ * session says afterwards. Nothing here decides success: the shell removes the
+ * cookies, re-reads, and this passes that answer along.
+ */
+router.post("/session/signout", async (req, res) => {
+  const parsed = SignOutOfSessionBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "workspaceId is required" });
+  }
+
+  const outcome = await signOutOfSession(
+    parsed.data.workspaceId,
+    parsed.data.platform,
+  );
+
+  req.log.info(
+    {
+      workspaceId: parsed.data.workspaceId,
+      platform: parsed.data.platform ?? "(workspace default)",
+      signedOut: outcome.signedOut,
+    },
+    "Sign-out requested",
+  );
+
+  return res.json(SignOutOfSessionResponse.parse(outcome));
+});
+
 router.post("/publish", async (req, res) => {
   const parsed = PublishPostBody.safeParse(req.body);
   if (!parsed.success) {
@@ -220,6 +266,8 @@ router.post("/publish", async (req, res) => {
     draftId: stored.id,
     platform: stored.platform,
     body: stored.body,
+    // The stored copy, like the text: what was approved is what is sent.
+    media: stored.media,
     approval: { approvedBy: stored.approvedBy, approvedAt: stored.approvedAt },
     source: "operator",
     // Pressing Post on a post that is also due is that instruction being

@@ -86,6 +86,33 @@ paths:
                 $ref: "#/components/schemas/SignInInvitation"
         "400":
           description: workspaceId is missing
+  /session/signout:
+    post:
+      operationId: signOutOfSession
+      tags: [publish]
+      summary: Destroy one network's session inside a workspace
+      description: >-
+        Removes the cookies this workspace holds for one network, then reads
+        the session back and reports what that read said. Scoped to a single
+        network because a workspace may hold accounts on several and each is
+        its own session. `signedOut` is the answer of the verification, never
+        of the removal itself: a sign-out reported without checking is the same
+        class of claim as a post reported without confirmation. A session kept
+        outside cookies (Bluesky and Mastodon use local storage) is reported as
+        not signed out, with a reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignOutRequest"
+      responses:
+        "200":
+          description: What the shell found when it tried, and what the session says now
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignOutResult"
   /publish:
     post:
       operationId: publishPost
@@ -117,6 +144,65 @@ paths:
           description: The platform rejected the post
         "503":
           description: The session bridge is not available in this runtime
+  /media:
+    post:
+      operationId: uploadMedia
+      tags: [media]
+      summary: Store an image or video for attachment to a draft
+      description: >-
+        Accepts raw bytes and stores them content-addressed under the data
+        directory, returning a reference. The bytes stay on disk: a draft, and
+        later a publish request, carry only the reference, because the browser
+        state document is rewritten whole on every edit and must not grow by
+        the size of an image.
+      parameters:
+        - in: header
+          name: x-filename
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+          description: Original filename, used as the upload's name on the network.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadedMedia"
+        "400":
+          description: Missing filename, empty body, or an unsupported type
+        "413":
+          description: The file is larger than this build accepts
+  /media/{id}:
+    get:
+      operationId: getMedia
+      tags: [media]
+      summary: Read stored bytes back, for preview
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The stored bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: No such upload
   /healthz:
     get:
       operationId: healthCheck
@@ -216,7 +302,7 @@ components:
         numberOfSuggestions:
           type: number
           minimum: 1
-          maximum: 4
+          maximum: 8
           default: 3
         maxCharacters:
           type: number
@@ -285,8 +371,51 @@ components:
           description: True when the workspace session is signed in to the platform
         accountHandle:
           type: string
+          description: >-
+            The signed-in handle, read from the network's own signed-in page in
+            this workspace's session. Absent when it could not be read — it is
+            never the workspace's stored label, because presenting a stored
+            string as the signed-in account is a claim nothing verified.
+        accountId:
+          type: string
+          description: >-
+            Stable account id from the partition's own cookies. Proof of which
+            account holds this session, but not a name.
+        handleSource:
+          type: string
+          enum: [session]
+          description: >-
+            Present only alongside accountHandle, and only ever "session", so a
+            caller cannot mistake an absent handle for a stored one.
+        handleUnknown:
+          type: string
+          description: Why the handle is absent, phrased for the operator.
         detail:
           type: string
+    SignOutRequest:
+      type: object
+      required: [workspaceId]
+      properties:
+        workspaceId:
+          type: string
+        platform:
+          type: string
+          description: >-
+            Which network to sign out of inside this workspace. Defaults to the
+            workspace's own platform. Only this network's cookies are removed —
+            other accounts in the same workspace keep their sessions.
+    SignOutResult:
+      type: object
+      required: [signedOut, detail]
+      properties:
+        signedOut:
+          type: boolean
+          description: >-
+            Whether the session reads signed out *after* the attempt. False
+            means the account is still usable and must not be treated as gone.
+        detail:
+          type: string
+          description: Shown to the operator verbatim.
     SignInRequest:
       type: object
       required: [workspaceId]
@@ -346,8 +475,47 @@ components:
           maxLength: 12000
         approval:
           $ref: "#/components/schemas/Approval"
+        media:
+          type: array
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/MediaRef"
         idempotencyKey:
           type: string
+    MediaRef:
+      type: object
+      description: >-
+        A reference to a stored upload. The bytes never travel in the browser
+        state document or in a publish request; only this reference does, and
+        the sha256 is what proves the file the shell uploads is the file the
+        operator approved.
+      required: [id, sha256, filename, mimeType, bytes]
+      properties:
+        id:
+          type: string
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        filename:
+          type: string
+          minLength: 1
+          maxLength: 255
+        mimeType:
+          type: string
+          minLength: 1
+          maxLength: 255
+        bytes:
+          type: number
+          minimum: 1
+        altText:
+          type: string
+          maxLength: 2000
+    UploadedMedia:
+      type: object
+      required: [media]
+      properties:
+        media:
+          $ref: "#/components/schemas/MediaRef"
     PublishResult:
       type: object
       required: [draftId, status, platform, attemptedAt]

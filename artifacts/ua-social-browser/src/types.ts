@@ -66,6 +66,10 @@ export interface SocialAccount {
  * `publishing` — handed to the workspace session, awaiting the platform
  * `published`  — the platform accepted it
  * `failed`     — the attempt failed; the reason is kept on the draft
+ * `attested`   — the attempt failed, and the operator later found the post on
+ *                the account and said so. Deliberately NOT `published`:
+ *                `published` means the network confirmed it, and an operator's
+ *                word is evidence of a different kind. See `lib/attestation.ts`.
  */
 export type DraftStatus =
   | 'draft'
@@ -73,19 +77,54 @@ export type DraftStatus =
   | 'scheduled'
   | 'publishing'
   | 'published'
-  | 'failed';
+  | 'failed'
+  | 'attested';
+
+/**
+ * An attachment, as the draft carries it.
+ *
+ * A reference, never the bytes. The whole browser state document is written on
+ * every edit, so an image inside it would be rewritten on every keystroke and
+ * kept forever by the append-only ledger. The file itself lives under the data
+ * directory, addressed by the hash of its contents, and that hash is what lets
+ * the shell prove the file it uploads is the file that was approved.
+ */
+export interface DraftMedia {
+  /** `<sha256>/<filename>`; also the path segment for `/api/media/`. */
+  id: string;
+  sha256: string;
+  filename: string;
+  mimeType: string;
+  bytes: number;
+  altText?: string;
+}
 
 export interface Draft {
   id: string;
   workspaceId: string;
   platform: Platform;
   body: string;
+  media: DraftMedia[];
   status: DraftStatus;
   scheduledFor: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
   postUrl: string | null;
   lastError: string | null;
+  /**
+   * The operator's account of a post the network never confirmed.
+   *
+   * Set only on an `attested` draft, and never a substitute for the network's
+   * own confirmation — it carries the name of whoever made the claim precisely
+   * so a reader can tell the two apart. `lastError` is kept alongside it: the
+   * record should say the confirmation never arrived *and* that the operator
+   * later found the post, because that is what happened.
+   */
+  attestation?: {
+    by: string;
+    at: string;
+    postUrl: string | null;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, LogIn, Plus, RefreshCw, Trash2 } from 'lucide-react';
-import { getSessionStatus, useBeginSignIn } from '@workspace/api-client-react';
+import {
+  getSessionStatus,
+  useBeginSignIn,
+  useSignOutOfSession,
+} from '@workspace/api-client-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   Dialog,
   DialogContent,
@@ -32,7 +46,7 @@ import {
   initialsFor,
   logActivity,
 } from '@/lib/workspace';
-import type { Platform } from '@/types';
+import type { Platform, SocialAccount } from '@/types';
 
 /** How often, and for how long, a sign-in in progress is checked for. */
 const POLL_MS = 3_000;
@@ -49,6 +63,9 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
   /** The account whose sign-in tab is open, if any. */
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [checkingId, setCheckingId] = useState<string | null>(null);
+  const signOut = useSignOutOfSession();
+  /** The account the operator is being asked to confirm removal of. */
+  const [removing, setRemoving] = useState<SocialAccount | null>(null);
 
   const accounts = state.accounts.filter(
     (account) => account.workspaceId === workspace.id,
@@ -205,12 +222,59 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
     }
   }
 
-  function removeAccount(accountId: string) {
-    if (pendingId === accountId) setPendingId(null);
-    updateState((current) => ({
-      ...current,
-      accounts: current.accounts.filter((item) => item.id !== accountId),
-    }));
+  /**
+   * Removes an account, and the session behind it.
+   *
+   * This used to filter the row out of state and stop there. The cookie jar is
+   * keyed by workspace, so the previous account stayed signed in: registering
+   * a different handle here reused that session, the badge read "Signed in"
+   * about the jar rather than about the name, and — because a draft carries a
+   * workspace and a platform but no account — an approved post would have gone
+   * out from whoever was actually in the jar.
+   *
+   * **The session goes first, and the label only follows if that worked.** A
+   * failed sign-out that still forgot the label would leave the operator with
+   * no row on screen and a live session underneath it, which is worse than
+   * either problem alone.
+   */
+  async function removeAccount(account: SocialAccount) {
+    if (pendingId === account.id) setPendingId(null);
+
+    try {
+      const outcome = await signOut.mutateAsync({
+        data: { workspaceId: workspace.id, platform: account.platform },
+      });
+
+      if (!outcome.signedOut) {
+        toast({
+          title: 'Still signed in — nothing removed',
+          description: outcome.detail,
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      updateState((current) => ({
+        ...current,
+        accounts: current.accounts.filter((item) => item.id !== account.id),
+        activity: logActivity(current, {
+          type: 'workspace',
+          title: 'Account removed and signed out',
+          detail: `${account.handle} · ${PLATFORM_LABEL[account.platform]} · ${workspace.name}`,
+        }),
+      }));
+
+      toast({ title: 'Signed out and removed', description: outcome.detail });
+    } catch {
+      toast({
+        title: 'Could not sign out',
+        description:
+          'The shell could not be reached, so nothing was changed. The account is still signed in.',
+        variant: 'destructive',
+      });
+    } finally {
+      setRemoving(null);
+    }
   }
 
   async function addAccount() {
@@ -356,8 +420,9 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8"
-                      aria-label="Remove account"
-                      onClick={() => removeAccount(account.id)}
+                      aria-label="Sign out and remove account"
+                      onClick={() => setRemoving(account)}
+                      disabled={signOut.isPending}
                       data-testid={`button-remove-${account.id}`}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -418,7 +483,7 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
                 id="account-name"
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="Northstar Studio"
+                placeholder="Display name"
                 data-testid="input-account-name"
               />
             </div>
@@ -428,7 +493,7 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
                 id="account-handle"
                 value={handle}
                 onChange={(event) => setHandle(event.target.value)}
-                placeholder="@northstar.studio"
+                placeholder="@handle"
                 data-testid="input-account-handle"
               />
             </div>
@@ -453,6 +518,55 @@ export function Accounts({ state, updateState, workspace }: SectionProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/*
+        The trash icon signs the workspace out now, not just forgets a name.
+        That is what makes the row's disappearance mean something — but it also
+        makes it destructive, so it is stated before it happens rather than
+        explained in a toast afterwards.
+      */}
+      <AlertDialog
+        open={removing !== null}
+        onOpenChange={(next) => {
+          if (!next) setRemoving(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Sign out of {removing ? PLATFORM_LABEL[removing.platform] : ''} and
+              remove this account?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {removing
+                ? `This destroys the ${PLATFORM_LABEL[removing.platform]} session in ${workspace.name}, so ${removing.handle} will have to sign in again — with a second factor if the account uses one. Other networks in this workspace keep their sessions. Nothing is removed unless the sign-out actually works.`
+                : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-remove">
+              Keep it
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={signOut.isPending}
+              onClick={(event) => {
+                // Held open until the shell answers, so the operator sees the
+                // refusal on the card rather than a dialog vanishing on a
+                // sign-out that did not happen.
+                event.preventDefault();
+                if (removing) void removeAccount(removing);
+              }}
+              data-testid="button-confirm-remove"
+            >
+              {signOut.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Sign out and remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </SectionShell>
   );
 }

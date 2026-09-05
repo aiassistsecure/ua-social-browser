@@ -52,6 +52,12 @@ const stub: PublisherPort = {
     signInCalls.push({ workspaceId, platform });
     return nextSignIn;
   },
+  async signOut() {
+    // Nothing in these suites exercises a sign-out; the port
+    // requires it, and a fake that lies about succeeding would be
+    // worse than one that plainly refuses.
+    return { signedOut: false, detail: "not exercised by this test" };
+  },
 };
 
 let bridge: SessionBridgeHandle;
@@ -154,7 +160,10 @@ test("a published post answers 200 with the post url", async () => {
   assert.equal(status, 200);
   assert.equal(json.postUrl, "https://x.com/acme/status/9");
   assert.equal(json.postId, "9");
-  assert.deepEqual(calls.at(-1), validBody);
+  // A request that names no attachments reaches the publisher with an empty
+  // list rather than an absent field, so nothing downstream has to decide what
+  // "no media key" means.
+  assert.deepEqual(calls.at(-1), { ...validBody, media: [] });
 });
 
 test("a signed-out workspace answers 401 so the API server can say so", async () => {

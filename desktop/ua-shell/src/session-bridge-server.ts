@@ -41,8 +41,30 @@ export const BRIDGE_TOKEN_HEADER = "x-ua-shell-token";
 
 export type SessionSnapshot = {
   authenticated: boolean;
+  /**
+   * The signed-in handle, read from the network's own signed-in page.
+   *
+   * Present only when it was actually read. It is never the workspace's
+   * configured label — a stored string presented as the signed-in account is a
+   * claim about someone's account that nothing checked.
+   */
   accountHandle?: string;
+  /** Stable account id from the partition's cookies. Proof, but not a name. */
+  accountId?: string;
+  /** Always `"session"` when a handle is present, so a caller cannot assume. */
+  handleSource?: "session";
+  /** Why the handle is absent, in words meant for the operator. */
+  handleUnknown?: string;
   detail: string;
+};
+
+export type PublishMediaInput = {
+  /** Absolute path inside the shared data directory. Verified before upload. */
+  path: string;
+  sha256: string;
+  filename: string;
+  mimeType: string;
+  altText?: string;
 };
 
 export type PublishRequestInput = {
@@ -50,6 +72,7 @@ export type PublishRequestInput = {
   draftId: string;
   platform: string;
   body: string;
+  media: PublishMediaInput[];
   idempotencyKey: string;
 };
 
@@ -89,6 +112,17 @@ export type PublisherPort = {
    * involve a second factor, so nothing here waits on it.
    */
   beginSignIn(workspaceId: string, platform?: string): Promise<SignInInvitation>;
+  /**
+   * Destroys one network's session inside the workspace, and verifies it.
+   *
+   * `signedOut` is the answer of a fresh session read, not of the removal
+   * loop. A sign-out that reports success without checking is the same class
+   * of claim as a post reported without confirmation.
+   */
+  signOut(
+    workspaceId: string,
+    platform?: string,
+  ): Promise<{ signedOut: boolean; detail: string }>;
 };
 
 export type BridgeLogger = {
@@ -167,13 +201,46 @@ function parsePublishInput(raw: unknown): PublishRequestInput | null {
     }
   }
 
+  // A malformed attachment is a refused request, not a dropped attachment.
+  // Posting the text without the picture would be publishing something nobody
+  // approved, and doing it quietly is worse than doing it loudly.
+  const media = parsePublishMedia(value.media);
+  if (media === null) return null;
+
   return {
     workspaceId: value.workspaceId as string,
     draftId: value.draftId as string,
     platform: value.platform as string,
     body: value.body as string,
+    media,
     idempotencyKey: value.idempotencyKey as string,
   };
+}
+
+/** `null` means the field was present but unusable; `[]` means none were sent. */
+function parsePublishMedia(raw: unknown): PublishMediaInput[] | null {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return null;
+
+  const media: PublishMediaInput[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const item = entry as Record<string, unknown>;
+    const required = ["path", "sha256", "filename", "mimeType"] as const;
+    for (const field of required) {
+      if (typeof item[field] !== "string" || (item[field] as string).trim() === "") {
+        return null;
+      }
+    }
+    media.push({
+      path: item.path as string,
+      sha256: item.sha256 as string,
+      filename: item.filename as string,
+      mimeType: item.mimeType as string,
+      ...(typeof item.altText === "string" ? { altText: item.altText } : {}),
+    });
+  }
+  return media;
 }
 
 /** Maps a publish outcome onto the HTTP shape the API server expects. */
@@ -254,6 +321,45 @@ export async function startSessionBridge(options: {
         accountHandle: snapshot.accountHandle,
         detail: snapshot.detail,
       });
+      return;
+    }
+
+    const signOutMatch = /^\/signout\/(.+)$/.exec(path);
+    if (request.method === "POST" && signOutMatch) {
+      const workspaceId = decodeURIComponent(signOutMatch[1] as string);
+
+      // Same rule as sign-in: an unreadable body is refused rather than
+      // treated as "no platform". Signing the wrong network out of a
+      // workspace destroys a session the operator did not ask to lose.
+      let platform: string | undefined;
+      try {
+        const text = await readBody(request);
+        if (text.trim() !== "") {
+          const parsed: unknown = JSON.parse(text);
+          const raw = (parsed as { platform?: unknown } | null)?.platform;
+          platform = typeof raw === "string" && raw.trim() !== "" ? raw.trim() : undefined;
+        }
+      } catch (error) {
+        sendJson(response, 400, {
+          detail:
+            error instanceof Error
+              ? `Unreadable sign-out request: ${error.message}`
+              : "Unreadable sign-out request",
+        });
+        return;
+      }
+
+      const outcome = await publisher.signOut(workspaceId, platform);
+
+      logger?.info("Sign-out requested", {
+        workspaceId,
+        platform: platform ?? "(workspace default)",
+        signedOut: outcome.signedOut,
+      });
+
+      // 200 either way: the shell did the work and is reporting what it found.
+      // A failed sign-out is an answer, not a transport error.
+      sendJson(response, 200, outcome);
       return;
     }
 

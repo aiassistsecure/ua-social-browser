@@ -65,12 +65,15 @@ export function Settings({ state, updateState, integrity }: SettingsProps) {
                   },
                 }))
               }
+              placeholder="Your name"
               className="max-w-sm"
               data-testid="input-operator-name"
             />
             <p className="text-xs text-muted-foreground">
               Recorded on every approval and sent with the post so the ledger
-              shows who signed off.
+              shows who signed off. Nothing can be approved while this is
+              empty, and approvals already recorded keep the name they were
+              signed under.
             </p>
           </div>
 
@@ -215,9 +218,10 @@ export function Settings({ state, updateState, integrity }: SettingsProps) {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Reset all browser state?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    Workspaces, UA profiles, drafts, accounts, and usage return
-                    to the seeded defaults. The ledger keeps its history, so the
-                    previous state remains in the export.
+                    Workspaces, drafts, accounts, activity, usage, and your
+                    approver name are cleared; UA profiles return to the
+                    built-in device presets. The ledger keeps its history, so
+                    the previous state remains in the export.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

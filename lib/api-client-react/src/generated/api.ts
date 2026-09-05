@@ -30,7 +30,10 @@ import type {
   SessionStatus,
   SignInInvitation,
   SignInRequest,
-  TenantInfo
+  SignOutRequest,
+  SignOutResult,
+  TenantInfo,
+  UploadedMedia
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -293,6 +296,78 @@ export const useBeginSignIn = <TError = ErrorType<void>,
       return useMutation(getBeginSignInMutationOptions(options));
     }
 
+export const getSignOutOfSessionUrl = () => {
+
+
+
+
+  return `/api/session/signout`
+}
+
+/**
+ * Removes the cookies this workspace holds for one network, then reads the session back and reports what that read said. Scoped to a single network because a workspace may hold accounts on several and each is its own session. `signedOut` is the answer of the verification, never of the removal itself: a sign-out reported without checking is the same class of claim as a post reported without confirmation. A session kept outside cookies (Bluesky and Mastodon use local storage) is reported as not signed out, with a reason.
+ * @summary Destroy one network's session inside a workspace
+ */
+export const signOutOfSession = async (signOutRequest: SignOutRequest, options?: Parameters<typeof customFetch>[1]): Promise<SignOutResult> => {
+
+  return customFetch<SignOutResult>(getSignOutOfSessionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(signOutRequest)
+  }
+);}
+
+
+
+
+
+export const getSignOutOfSessionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof signOutOfSession>>, TError,{data: BodyType<SignOutRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof signOutOfSession>>, TError,{data: BodyType<SignOutRequest>}, TContext> => {
+
+const mutationKey = ['signOutOfSession'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof signOutOfSession>>, {data: BodyType<SignOutRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  signOutOfSession(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SignOutOfSessionMutationResult = NonNullable<Awaited<ReturnType<typeof signOutOfSession>>>
+    export type SignOutOfSessionMutationBody = BodyType<SignOutRequest>
+    export type SignOutOfSessionMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Destroy one network's session inside a workspace
+ */
+export const useSignOutOfSession = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof signOutOfSession>>, TError,{data: BodyType<SignOutRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof signOutOfSession>>,
+        TError,
+        {data: BodyType<SignOutRequest>},
+        TContext
+      > => {
+      return useMutation(getSignOutOfSessionMutationOptions(options));
+    }
+
 export const getPublishPostUrl = () => {
 
 
@@ -364,6 +439,155 @@ export const usePublishPost = <TError = ErrorType<void>,
       > => {
       return useMutation(getPublishPostMutationOptions(options));
     }
+
+export const getUploadMediaUrl = () => {
+
+
+
+
+  return `/api/media`
+}
+
+/**
+ * Accepts raw bytes and stores them content-addressed under the data directory, returning a reference. The bytes stay on disk: a draft, and later a publish request, carry only the reference, because the browser state document is rewritten whole on every edit and must not grow by the size of an image.
+ * @summary Store an image or video for attachment to a draft
+ */
+export const uploadMedia = async (uploadMediaBody: Blob, options?: Parameters<typeof customFetch>[1]): Promise<UploadedMedia> => {
+
+  return customFetch<UploadedMedia>(getUploadMediaUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', ...options?.headers },
+    body: uploadMediaBody
+  }
+);}
+
+
+
+
+
+export const getUploadMediaMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadMedia>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof uploadMedia>>, TError,{data: BodyType<Blob>}, TContext> => {
+
+const mutationKey = ['uploadMedia'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof uploadMedia>>, {data: BodyType<Blob>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  uploadMedia(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UploadMediaMutationResult = NonNullable<Awaited<ReturnType<typeof uploadMedia>>>
+    export type UploadMediaMutationBody = BodyType<Blob>
+    export type UploadMediaMutationError = ErrorType<void>
+
+    /**
+ * @summary Store an image or video for attachment to a draft
+ */
+export const useUploadMedia = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof uploadMedia>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof uploadMedia>>,
+        TError,
+        {data: BodyType<Blob>},
+        TContext
+      > => {
+      return useMutation(getUploadMediaMutationOptions(options));
+    }
+
+export const getGetMediaUrl = (id: string,) => {
+
+
+
+
+  return `/api/media/${id}`
+}
+
+/**
+ * @summary Read stored bytes back, for preview
+ */
+export const getMedia = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
+
+  return customFetch<Blob>(getGetMediaUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetMediaQueryKey = (id: string,) => {
+    return [
+    `/api/media/${id}`
+    ] as const;
+    }
+
+
+export const getGetMediaQueryOptions = <TData = Awaited<ReturnType<typeof getMedia>>, TError = ErrorType<void>>(id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMedia>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMediaQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMedia>>> = ({ signal }) => getMedia(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMedia>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetMediaQueryResult = NonNullable<Awaited<ReturnType<typeof getMedia>>>
+export type GetMediaQueryError = ErrorType<void>
+
+
+/**
+ * @summary Read stored bytes back, for preview
+ */
+
+export function useGetMedia<TData = Awaited<ReturnType<typeof getMedia>>, TError = ErrorType<void>>(
+ id: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getMedia>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetMediaQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
 export const getHealthCheckUrl = () => {
 

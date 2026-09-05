@@ -1,11 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CalendarClock,
   CheckCircle2,
   Copy,
+  Infinity as InfinityIcon,
   Loader2,
   Sparkles,
+  Trash2,
   Wand2,
 } from 'lucide-react';
 import {
@@ -31,6 +33,13 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
+import {
+  appendCandidates,
+  pruneReviewed,
+  replaceCandidates,
+  withoutCandidate,
+  type Candidate,
+} from '@/lib/candidates';
 import { cn } from '@/lib/utils';
 import { SectionShell, type SectionProps } from '@/sections/section-shell';
 import {
@@ -41,6 +50,47 @@ import {
   logActivity,
 } from '@/lib/workspace';
 import type { Platform } from '@/types';
+
+/**
+ * Reveal timing. These must match `.ua-revealing` in `index.css`.
+ *
+ * The stagger is what makes a batch read as being written rather than
+ * appearing: eight cards landing at once is a jolt. The sweep is the longer of
+ * the two CSS animations, so it decides when the run is over.
+ */
+/**
+ * A card's silhouette while the model writes it.
+ *
+ * Sized to a real option — label row, three lines of body, a rationale line,
+ * a button row — because the point is that nothing moves when the text
+ * arrives. A spinner in the middle of an empty panel would tell the operator
+ * less and cost them a layout jump.
+ */
+function GhostSuggestion() {
+  return (
+    <Card className="ua-ghost" aria-hidden="true">
+      <CardContent className="space-y-3 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="ua-ghost-bar h-3 w-20" />
+          <div className="ua-ghost-bar h-3 w-12" />
+        </div>
+        <div className="space-y-2">
+          <div className="ua-ghost-bar h-3.5 w-full" />
+          <div className="ua-ghost-bar h-3.5 w-[92%]" />
+          <div className="ua-ghost-bar h-3.5 w-[64%]" />
+        </div>
+        <div className="ua-ghost-bar h-3 w-2/5" />
+        <div className="flex gap-2 pt-1">
+          <div className="ua-ghost-bar h-8 w-28" />
+          <div className="ua-ghost-bar h-8 w-20" />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+const REVEAL_STAGGER_MS = 70;
+const REVEAL_SWEEP_MS = 620;
 
 const TASKS: Array<{ id: AiSuggestionInputTask; label: string; hint: string }> = [
   { id: 'suggest', label: 'Suggest', hint: 'Draft new options from your notes' },
@@ -73,12 +123,45 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   const [model, setModel] = useState(state.settings.model);
   const [count, setCount] = useState(3);
   const [includeHashtags, setIncludeHashtags] = useState(false);
-  const [suggestions, setSuggestions] = useState<AiSuggestion[]>([]);
-  const [reviewed, setReviewed] = useState<Record<number, boolean>>({});
+  // A working pool, not the result of one request: generating more adds to it
+  // and judging a card removes that card. Keyed by id throughout — see
+  // `lib/candidates.ts` for why an index key is unsafe here.
+  const [suggestions, setSuggestions] = useState<Array<Candidate<AiSuggestion>>>([]);
+  /**
+   * Which end of the pool the pending batch will land on.
+   *
+   * The ghosts stand where the real cards will appear — below the existing
+   * options for "keep going", in their place for a fresh generation — so the
+   * list does not reshuffle when the text arrives.
+   */
+  const [pendingMode, setPendingMode] = useState<'replace' | 'more' | null>(null);
+  /**
+   * id -> position in the arriving batch, driving the reveal stagger.
+   *
+   * Keyed by id rather than index for the same reason the review flags are:
+   * a card removed mid-reveal must not hand its animation to a neighbour.
+   */
+  const [revealing, setRevealing] = useState<Record<string, number>>({});
+  const [reviewed, setReviewed] = useState<Record<string, boolean>>({});
+  const [dissolving, setDissolving] = useState<Record<string, true>>({});
+  const nextOrdinal = useRef(1);
+  /** Pending dissolve timers, so leaving the page mid-animation is harmless. */
+  const dissolveTimers = useRef<number[]>([]);
+  const revealTimers = useRef<number[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const modelsQuery = useListAiModels();
   const suggest = useCreateAiSuggestion();
+
+  useEffect(
+    () => () => {
+      for (const timer of dissolveTimers.current) window.clearTimeout(timer);
+      dissolveTimers.current = [];
+      for (const timer of revealTimers.current) window.clearTimeout(timer);
+      revealTimers.current = [];
+    },
+    [],
+  );
 
   const modelOptions = useMemo(() => {
     const fetched = modelsQuery.data?.models ?? [];
@@ -93,9 +176,15 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
   const limit = PLATFORM_LIMIT[platform];
   const canSubmit = sourceText.trim().length >= 3 && !suggest.isPending;
 
-  function handleGenerate() {
+  /**
+   * `mode` is the difference between starting over and keeping the loop going.
+   * "More" appends, so options accumulate while you work through them; the
+   * plain generate replaces, for when the brief itself has changed.
+   */
+  function handleGenerate(mode: 'replace' | 'more' = 'replace') {
     if (!canSubmit) return;
     setErrorMessage(null);
+    setPendingMode(mode);
 
     suggest.mutate(
       {
@@ -113,8 +202,62 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
       },
       {
         onSuccess: (result) => {
-          setSuggestions(result.suggestions);
-          setReviewed({});
+          let duplicates = 0;
+          let arrived: string[] = [];
+          setSuggestions((current) => {
+            const outcome =
+              mode === 'more'
+                ? appendCandidates({
+                    existing: current,
+                    incoming: result.suggestions,
+                    startOrdinal: nextOrdinal.current,
+                    makeId: () => createId('sug'),
+                  })
+                : replaceCandidates({
+                    incoming: result.suggestions,
+                    makeId: () => createId('sug'),
+                  });
+            nextOrdinal.current = outcome.nextOrdinal;
+            duplicates = outcome.duplicates;
+            // Only what is actually new gets the reveal. On "keep going" the
+            // options already on screen must not re-animate — the operator may
+            // be reading one of them.
+            const before = new Set(current.map((candidate) => candidate.id));
+            arrived = outcome.candidates
+              .filter((candidate) => !before.has(candidate.id))
+              .map((candidate) => candidate.id);
+            return outcome.candidates;
+          });
+
+          setPendingMode(null);
+          if (arrived.length > 0) {
+            setRevealing(
+              Object.fromEntries(arrived.map((id, index) => [id, index])),
+            );
+            // Cleared once the last card has landed, so the class does not sit
+            // on the cards holding them at opacity 0 if anything re-renders.
+            const runFor =
+              REVEAL_STAGGER_MS * (arrived.length - 1) + REVEAL_SWEEP_MS + 80;
+            const timer = window.setTimeout(() => {
+              setRevealing({});
+              revealTimers.current = revealTimers.current.filter(
+                (candidate) => candidate !== timer,
+              );
+            }, runFor);
+            revealTimers.current.push(timer);
+          }
+
+          if (mode === 'replace') setReviewed({});
+          if (duplicates > 0) {
+            toast({
+              title:
+                duplicates === 1
+                  ? 'One option repeated what you already had'
+                  : `${duplicates} options repeated what you already had`,
+              description:
+                'They were dropped rather than listed. Change the tone or the notes to push it somewhere new.',
+            });
+          }
           updateState((current) => ({
             ...current,
             usage: {
@@ -131,6 +274,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           }));
         },
         onError: () => {
+          setPendingMode(null);
           setErrorMessage(
             'AiAssist could not generate suggestions. The request failed upstream — nothing was saved.',
           );
@@ -139,8 +283,40 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
     );
   }
 
-  function saveAsDraft(suggestion: AiSuggestion, index: number) {
-    if (!reviewed[index]) {
+  /** How long the holo sweep runs. Matches `.ua-dissolving` in index.css. */
+  const DISSOLVE_MS = 420;
+
+  /**
+   * Takes a card out of the pool, visibly.
+   *
+   * The card is marked first and removed when the animation is done. Dropping
+   * it from state on click would unmount the element immediately and nothing
+   * would play — the removal is the behaviour, the sweep is how the operator
+   * sees that their judgement landed.
+   */
+  function dissolve(id: string) {
+    setDissolving((current) => ({ ...current, [id]: true }));
+    const timer = window.setTimeout(() => {
+      setSuggestions((current) => {
+        const next = withoutCandidate(current, id);
+        // Prune in the same tick the card leaves, so a sign-off never outlives
+        // the text it was given for.
+        setReviewed((flags) => pruneReviewed(flags, next));
+        return next;
+      });
+      setDissolving((current) => {
+        const { [id]: _gone, ...rest } = current;
+        return rest;
+      });
+      dissolveTimers.current = dissolveTimers.current.filter(
+        (pending) => pending !== timer,
+      );
+    }, DISSOLVE_MS);
+    dissolveTimers.current.push(timer);
+  }
+
+  function saveAsDraft(candidate: Candidate<AiSuggestion>) {
+    if (!reviewed[candidate.id]) {
       toast({
         title: 'Review required',
         description:
@@ -157,7 +333,8 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
           id: createId('draft'),
           workspaceId: workspace.id,
           platform,
-          body: suggestion.text,
+          body: candidate.text,
+          media: [],
           status: 'draft',
           scheduledFor: null,
           approvedBy: null,
@@ -176,10 +353,19 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
       }),
     }));
 
+    // It lives in the review queue now, so it leaves the pool. Nothing is lost:
+    // the queue and the calendar are where a draft is worked on from here.
+    dissolve(candidate.id);
+
     toast({
       title: 'Saved to drafts',
-      description: 'You can edit, schedule, or discard it from Drafts.',
+      description: 'You can edit, schedule, or discard it from the review queue.',
     });
+  }
+
+  /** Discarding a candidate writes nothing — it was never a draft. */
+  function discard(candidate: Candidate<AiSuggestion>) {
+    dissolve(candidate.id);
   }
 
   async function copyText(text: string) {
@@ -307,7 +493,7 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                 id="composer-count"
                 type="range"
                 min={1}
-                max={4}
+                max={8}
                 value={count}
                 onChange={(event) => setCount(Number(event.target.value))}
                 data-testid="input-count"
@@ -350,18 +536,45 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                   {sourceText.length} / 12000 · target ≤ {limit} chars for{' '}
                   {PLATFORM_LABEL[platform]}
                 </span>
-                <Button
-                  onClick={handleGenerate}
-                  disabled={!canSubmit}
-                  data-testid="button-generate"
-                >
-                  {suggest.isPending ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Wand2 className="mr-2 h-4 w-4" />
-                  )}
-                  {suggest.isPending ? 'Generating' : 'Generate suggestions'}
-                </Button>
+                <div className="flex items-center gap-2">
+                  {suggestions.length > 0 ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => handleGenerate('more')}
+                      disabled={!canSubmit}
+                      // Disabled is the guard against a second request; the
+                      // glow is so a working control does not read as a dead
+                      // one. Only the button that was pressed lights up.
+                      className={cn(pendingMode === 'more' && 'ua-charging')}
+                      title="Add another batch without clearing the ones already here"
+                      data-testid="button-generate-more"
+                    >
+                      {suggest.isPending ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <InfinityIcon className="mr-2 h-4 w-4" />
+                      )}
+                      Keep going
+                    </Button>
+                  ) : null}
+                  <Button
+                    onClick={() => handleGenerate('replace')}
+                    disabled={!canSubmit}
+                    className={cn(pendingMode === 'replace' && 'ua-charging')}
+                    data-testid="button-generate"
+                  >
+                    {suggest.isPending ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="mr-2 h-4 w-4" />
+                    )}
+                    {suggest.isPending
+                      ? 'Generating'
+                      : suggestions.length > 0
+                        ? 'Start over'
+                        : 'Generate suggestions'}
+                  </Button>
+                </div>
               </div>
 
               {errorMessage ? (
@@ -376,26 +589,60 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
             </CardContent>
           </Card>
 
-          {suggestions.length === 0 ? (
+          {/*
+            A fresh generation replaces the list, so its ghosts stand where the
+            options will be. "Keep going" appends, so they come after the cards
+            already on screen — further down, where the new options land.
+          */}
+          {pendingMode === 'replace' ? (
+            <div className="space-y-4" data-testid="generating-ghosts">
+              {Array.from({ length: count }, (_, index) => (
+                <GhostSuggestion key={`ghost-${index}`} />
+              ))}
+            </div>
+          ) : suggestions.length === 0 ? (
             <Card className="border-dashed">
               <CardContent className="flex flex-col items-center gap-2 p-10 text-center">
                 <Sparkles className="h-6 w-6 text-muted-foreground" />
                 <p className="text-sm font-medium">No suggestions yet</p>
                 <p className="max-w-sm text-sm text-muted-foreground">
                   Write your notes and generate options. Each one arrives with a
-                  rationale so you can judge it rather than trust it.
+                  rationale so you can judge it rather than trust it. Options
+                  you keep or drop leave this list — the review queue and the
+                  calendar are where a saved draft lives from then on.
                 </p>
               </CardContent>
             </Card>
           ) : (
-            suggestions.map((suggestion, index) => {
+            suggestions.map((suggestion) => {
               const overLimit = suggestion.characterCount > limit;
+              const isReviewed = Boolean(reviewed[suggestion.id]);
               return (
-                <Card key={`${index}-${suggestion.characterCount}`} data-testid={`suggestion-${index}`}>
+                <Card
+                  key={suggestion.id}
+                  className={cn(
+                    dissolving[suggestion.id] && 'ua-dissolving',
+                    // A card being dismissed is never also arriving; the
+                    // dissolve wins so a fast accept cannot fight the reveal.
+                    !dissolving[suggestion.id] &&
+                      revealing[suggestion.id] !== undefined &&
+                      'ua-revealing',
+                  )}
+                  style={
+                    revealing[suggestion.id] !== undefined
+                      ? ({
+                          ['--ua-reveal-delay' as string]: `${
+                            revealing[suggestion.id]! * REVEAL_STAGGER_MS
+                          }ms`,
+                        } as React.CSSProperties)
+                      : undefined
+                  }
+                  data-testid={`suggestion-${suggestion.id}`}
+                >
                   <CardContent className="space-y-3 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        Option {index + 1}
+                        Option {suggestion.ordinal}
                       </span>
                       <span
                         className={cn(
@@ -427,14 +674,14 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <label className="flex items-center gap-2 text-xs text-muted-foreground">
                         <Switch
-                          checked={Boolean(reviewed[index])}
+                          checked={isReviewed}
                           onCheckedChange={(checked) =>
                             setReviewed((current) => ({
                               ...current,
-                              [index]: checked,
+                              [suggestion.id]: checked,
                             }))
                           }
-                          data-testid={`switch-reviewed-${index}`}
+                          data-testid={`switch-reviewed-${suggestion.id}`}
                         />
                         I read this and take responsibility for it
                       </label>
@@ -444,18 +691,28 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
                           variant="ghost"
                           size="sm"
                           onClick={() => copyText(suggestion.text)}
-                          data-testid={`button-copy-${index}`}
+                          data-testid={`button-copy-${suggestion.id}`}
                         >
                           <Copy className="mr-2 h-3.5 w-3.5" />
                           Copy
                         </Button>
                         <Button
+                          variant="ghost"
                           size="sm"
-                          variant={reviewed[index] ? 'default' : 'outline'}
-                          onClick={() => saveAsDraft(suggestion, index)}
-                          data-testid={`button-save-draft-${index}`}
+                          onClick={() => discard(suggestion)}
+                          title="Drop this option. Nothing is saved."
+                          data-testid={`button-discard-${suggestion.id}`}
                         >
-                          {reviewed[index] ? (
+                          <Trash2 className="mr-2 h-3.5 w-3.5" />
+                          Not this one
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={isReviewed ? 'default' : 'outline'}
+                          onClick={() => saveAsDraft(suggestion)}
+                          data-testid={`button-save-draft-${suggestion.id}`}
+                        >
+                          {isReviewed ? (
                             <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
                           ) : (
                             <CalendarClock className="mr-2 h-3.5 w-3.5" />
@@ -469,6 +726,15 @@ export function Composer({ state, updateState, workspace }: SectionProps) {
               );
             })
           )}
+
+          {/* "Keep going" adds to the pool, so the wait shows up below it. */}
+          {pendingMode === 'more' ? (
+            <div className="space-y-4" data-testid="generating-ghosts-more">
+              {Array.from({ length: count }, (_, index) => (
+                <GhostSuggestion key={`ghost-more-${index}`} />
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </SectionShell>

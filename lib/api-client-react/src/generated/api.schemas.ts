@@ -69,7 +69,7 @@ export interface AiSuggestionInput {
   model?: string;
   /**
      * @minimum 1
-     * @maximum 4
+     * @maximum 8
      */
   numberOfSuggestions?: number;
   /**
@@ -120,13 +120,43 @@ export interface TenantInfo {
   label: string;
 }
 
+/**
+ * Present only alongside accountHandle, and only ever "session", so a caller cannot mistake an absent handle for a stored one.
+ */
+export type SessionStatusHandleSource = typeof SessionStatusHandleSource[keyof typeof SessionStatusHandleSource];
+
+
+export const SessionStatusHandleSource = {
+  session: 'session',
+} as const;
+
 export interface SessionStatus {
   workspaceId: string;
   /** True when the native browser session bridge is reachable */
   bridgeAvailable: boolean;
   /** True when the workspace session is signed in to the platform */
   authenticated: boolean;
+  /** The signed-in handle, read from the network's own signed-in page in this workspace's session. Absent when it could not be read — it is never the workspace's stored label, because presenting a stored string as the signed-in account is a claim nothing verified. */
   accountHandle?: string;
+  /** Stable account id from the partition's own cookies. Proof of which account holds this session, but not a name. */
+  accountId?: string;
+  /** Present only alongside accountHandle, and only ever "session", so a caller cannot mistake an absent handle for a stored one. */
+  handleSource?: SessionStatusHandleSource;
+  /** Why the handle is absent, phrased for the operator. */
+  handleUnknown?: string;
+  detail: string;
+}
+
+export interface SignOutRequest {
+  workspaceId: string;
+  /** Which network to sign out of inside this workspace. Defaults to the workspace's own platform. Only this network's cookies are removed — other accounts in the same workspace keep their sessions. */
+  platform?: string;
+}
+
+export interface SignOutResult {
+  /** Whether the session reads signed out *after* the attempt. False means the account is still usable and must not be treated as gone. */
+  signedOut: boolean;
+  /** Shown to the operator verbatim. */
   detail: string;
 }
 
@@ -177,6 +207,29 @@ export const PublishRequestPlatform = {
   tumblr: 'tumblr',
 } as const;
 
+/**
+ * A reference to a stored upload. The bytes never travel in the browser state document or in a publish request; only this reference does, and the sha256 is what proves the file the shell uploads is the file the operator approved.
+ */
+export interface MediaRef {
+  id: string;
+  /** @pattern ^[0-9a-f]{64}$ */
+  sha256: string;
+  /**
+     * @minLength 1
+     * @maxLength 255
+     */
+  filename: string;
+  /**
+     * @minLength 1
+     * @maxLength 255
+     */
+  mimeType: string;
+  /** @minimum 1 */
+  bytes: number;
+  /** @maxLength 2000 */
+  altText?: string;
+}
+
 export interface PublishRequest {
   workspaceId: string;
   draftId: string;
@@ -187,7 +240,13 @@ export interface PublishRequest {
      */
   body: string;
   approval: Approval;
+  /** @maxItems 10 */
+  media?: MediaRef[];
   idempotencyKey?: string;
+}
+
+export interface UploadedMedia {
+  media: MediaRef;
 }
 
 export type PublishResultStatus = typeof PublishResultStatus[keyof typeof PublishResultStatus];

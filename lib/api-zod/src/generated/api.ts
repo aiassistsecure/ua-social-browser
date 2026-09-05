@@ -30,7 +30,10 @@ export const GetSessionStatusResponse = zod.object({
   "workspaceId": zod.string(),
   "bridgeAvailable": zod.boolean().describe('True when the native browser session bridge is reachable'),
   "authenticated": zod.boolean().describe('True when the workspace session is signed in to the platform'),
-  "accountHandle": zod.string().optional(),
+  "accountHandle": zod.string().optional().describe('The signed-in handle, read from the network\'s own signed-in page in this workspace\'s session. Absent when it could not be read — it is never the workspace\'s stored label, because presenting a stored string as the signed-in account is a claim nothing verified.'),
+  "accountId": zod.string().optional().describe('Stable account id from the partition\'s own cookies. Proof of which account holds this session, but not a name.'),
+  "handleSource": zod.enum(['session']).optional().describe('Present only alongside accountHandle, and only ever \"session\", so a caller cannot mistake an absent handle for a stored one.'),
+  "handleUnknown": zod.string().optional().describe('Why the handle is absent, phrased for the operator.'),
   "detail": zod.string()
 })
 
@@ -54,12 +57,37 @@ export const BeginSignInResponse = zod.object({
 
 
 /**
+ * Removes the cookies this workspace holds for one network, then reads the session back and reports what that read said. Scoped to a single network because a workspace may hold accounts on several and each is its own session. `signedOut` is the answer of the verification, never of the removal itself: a sign-out reported without checking is the same class of claim as a post reported without confirmation. A session kept outside cookies (Bluesky and Mastodon use local storage) is reported as not signed out, with a reason.
+ * @summary Destroy one network's session inside a workspace
+ */
+export const SignOutOfSessionBody = zod.object({
+  "workspaceId": zod.string(),
+  "platform": zod.string().optional().describe('Which network to sign out of inside this workspace. Defaults to the workspace\'s own platform. Only this network\'s cookies are removed — other accounts in the same workspace keep their sessions.')
+})
+
+export const SignOutOfSessionResponse = zod.object({
+  "signedOut": zod.boolean().describe('Whether the session reads signed out \*after\* the attempt. False means the account is still usable and must not be treated as gone.'),
+  "detail": zod.string().describe('Shown to the operator verbatim.')
+})
+
+
+/**
  * Submits an already human-approved post through the browser session that belongs to the workspace. The request is rejected unless an explicit human approval is attached. Requires the native session bridge; there is no server-side fallback that posts on the user's behalf.
  * @summary Post approved content through the workspace's authenticated session
  */
 export const publishPostBodyBodyMax = 12000;
 
 export const publishPostBodyApprovalApprovedByMax = 120;
+
+export const publishPostBodyMediaItemSha256RegExp = new RegExp('^[0-9a-f]{64}$');
+export const publishPostBodyMediaItemFilenameMax = 255;
+
+export const publishPostBodyMediaItemMimeTypeMax = 255;
+
+
+export const publishPostBodyMediaItemAltTextMax = 2000;
+
+export const publishPostBodyMediaMax = 10;
 
 
 
@@ -72,6 +100,14 @@ export const PublishPostBody = zod.object({
   "approvedBy": zod.string().min(1).max(publishPostBodyApprovalApprovedByMax),
   "approvedAt": zod.string()
 }).describe('Human sign-off captured in the UI before anything is posted'),
+  "media": zod.array(zod.object({
+  "id": zod.string(),
+  "sha256": zod.string().regex(publishPostBodyMediaItemSha256RegExp),
+  "filename": zod.string().min(1).max(publishPostBodyMediaItemFilenameMax),
+  "mimeType": zod.string().min(1).max(publishPostBodyMediaItemMimeTypeMax),
+  "bytes": zod.number().min(1),
+  "altText": zod.string().max(publishPostBodyMediaItemAltTextMax).optional()
+}).describe('A reference to a stored upload. The bytes never travel in the browser state document or in a publish request; only this reference does, and the sha256 is what proves the file the shell uploads is the file the operator approved.')).max(publishPostBodyMediaMax).optional(),
   "idempotencyKey": zod.string().optional()
 })
 
@@ -84,6 +120,50 @@ export const PublishPostResponse = zod.object({
   "postId": zod.string().optional(),
   "message": zod.string().optional()
 })
+
+
+/**
+ * Accepts raw bytes and stores them content-addressed under the data directory, returning a reference. The bytes stay on disk: a draft, and later a publish request, carry only the reference, because the browser state document is rewritten whole on every edit and must not grow by the size of an image.
+ * @summary Store an image or video for attachment to a draft
+ */
+export const uploadMediaHeaderXFilenameMax = 255;
+
+
+
+export const UploadMediaHeader = zod.object({
+  "x-filename": zod.string().min(1).max(uploadMediaHeaderXFilenameMax).describe('Original filename, used as the upload\'s name on the network.')
+})
+
+export const uploadMediaResponseMediaSha256RegExp = new RegExp('^[0-9a-f]{64}$');
+export const uploadMediaResponseMediaFilenameMax = 255;
+
+export const uploadMediaResponseMediaMimeTypeMax = 255;
+
+
+export const uploadMediaResponseMediaAltTextMax = 2000;
+
+
+
+export const UploadMediaResponse = zod.object({
+  "media": zod.object({
+  "id": zod.string(),
+  "sha256": zod.string().regex(uploadMediaResponseMediaSha256RegExp),
+  "filename": zod.string().min(1).max(uploadMediaResponseMediaFilenameMax),
+  "mimeType": zod.string().min(1).max(uploadMediaResponseMediaMimeTypeMax),
+  "bytes": zod.number().min(1),
+  "altText": zod.string().max(uploadMediaResponseMediaAltTextMax).optional()
+}).describe('A reference to a stored upload. The bytes never travel in the browser state document or in a publish request; only this reference does, and the sha256 is what proves the file the shell uploads is the file the operator approved.')
+})
+
+
+/**
+ * @summary Read stored bytes back, for preview
+ */
+export const GetMediaParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const GetMediaResponse = zod.unknown()
 
 
 /**
@@ -117,7 +197,7 @@ export const createAiSuggestionBodySourceTextMin = 3;
 export const createAiSuggestionBodySourceTextMax = 12000;
 
 export const createAiSuggestionBodyNumberOfSuggestionsDefault = 3;
-export const createAiSuggestionBodyNumberOfSuggestionsMax = 4;
+export const createAiSuggestionBodyNumberOfSuggestionsMax = 8;
 
 export const createAiSuggestionBodyMaxCharactersDefault = 1300;
 export const createAiSuggestionBodyMaxCharactersMin = 40;

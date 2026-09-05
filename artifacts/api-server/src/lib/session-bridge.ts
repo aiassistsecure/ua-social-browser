@@ -20,7 +20,13 @@ export type BridgeStatus = {
   workspaceId: string;
   bridgeAvailable: boolean;
   authenticated: boolean;
+  /** Read from the network's signed-in page by the shell. Never a stored label. */
   accountHandle?: string;
+  /** Stable account id from the partition's cookies: proof, but not a name. */
+  accountId?: string;
+  handleSource?: "session";
+  /** Why the handle is absent, phrased for the operator. */
+  handleUnknown?: string;
   detail: string;
 };
 
@@ -29,6 +35,20 @@ export type BridgePublishInput = {
   draftId: string;
   platform: string;
   body: string;
+  /**
+   * References, not bytes. The shell resolves each one against the same data
+   * directory this process writes to — the shell set `NEDB_DATA_DIR` and
+   * spawned this server, so both see one filesystem — and re-hashes the file
+   * before uploading it.
+   */
+  media?: Array<{
+    /** Absolute path in the shared data directory; the shell re-hashes it. */
+    path: string;
+    sha256: string;
+    filename: string;
+    mimeType: string;
+    altText?: string;
+  }>;
   idempotencyKey: string;
 };
 
@@ -38,7 +58,19 @@ export type BridgePublishOutcome =
   | { kind: "rejected"; detail: string }
   | { kind: "unavailable"; detail: string };
 
-const REQUEST_TIMEOUT_MS = 20_000;
+/**
+ * How long a bridge call may take.
+ *
+ * Coupled to the shell's publish budget and deliberately larger than it. The
+ * shell charges setup and the composer flow separately (12s + 18s + teardown,
+ * see `PUBLISH_WORST_CASE_MS` in its publisher), and abandoning a call that is
+ * still deciding would manufacture the exact ambiguity the design exists to
+ * avoid: a post already submitted, with nobody left listening for the answer.
+ *
+ * Raise this whenever that budget grows. It was 20s against a 17s budget, and
+ * the 17s was itself being eaten by an unbounded page load.
+ */
+const REQUEST_TIMEOUT_MS = 40_000;
 
 /** Header the shell requires on every bridge call. */
 const BRIDGE_TOKEN_HEADER = "X-UA-Shell-Token";
@@ -138,6 +170,9 @@ export async function readSessionStatus(
     const data = (payload ?? {}) as {
       authenticated?: boolean;
       accountHandle?: string;
+      accountId?: string;
+      handleSource?: "session";
+      handleUnknown?: string;
       detail?: string;
     };
 
@@ -145,7 +180,12 @@ export async function readSessionStatus(
       workspaceId,
       bridgeAvailable: true,
       authenticated: Boolean(data.authenticated),
+      // Passed through exactly as the shell reported it. This layer must not
+      // invent an identity, and has nothing to invent one from.
       accountHandle: data.accountHandle,
+      accountId: data.accountId,
+      handleSource: data.handleSource,
+      handleUnknown: data.handleUnknown,
       detail:
         data.detail ??
         (data.authenticated
@@ -240,6 +280,57 @@ export async function beginSignIn(
         error instanceof Error
           ? `Session bridge unreachable: ${error.message}`
           : "Session bridge unreachable.",
+    };
+  }
+}
+
+export type BridgeSignOut = { signedOut: boolean; detail: string };
+
+/**
+ * Asks the shell to destroy one network's session inside a workspace.
+ *
+ * The shell removes the cookies and then reads the session back; `signedOut`
+ * is the answer of that read. This layer adds nothing to it — inventing a
+ * success here would be the same lie the shell is careful not to tell.
+ */
+export async function signOutOfSession(
+  workspaceId: string,
+  platform?: string,
+): Promise<BridgeSignOut> {
+  if (!isBridgeConfigured()) {
+    return { signedOut: false, detail: unavailableDetail() };
+  }
+
+  try {
+    const { ok, payload } = await callBridge(
+      `/signout/${encodeURIComponent(workspaceId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ platform }),
+      },
+    );
+
+    const data = (payload ?? {}) as { signedOut?: boolean; detail?: string };
+
+    if (!ok) {
+      return {
+        signedOut: false,
+        detail: data.detail ?? "The shell could not sign this workspace out.",
+      };
+    }
+
+    return {
+      signedOut: Boolean(data.signedOut),
+      detail: data.detail ?? "The shell reported no detail for this sign-out.",
+    };
+  } catch (error) {
+    return {
+      signedOut: false,
+      detail:
+        error instanceof Error
+          ? `Session bridge unreachable: ${error.message}. The account is still signed in.`
+          : "Session bridge unreachable. The account is still signed in.",
     };
   }
 }

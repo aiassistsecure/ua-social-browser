@@ -8,6 +8,8 @@ import {
 } from "../lib/browser-store";
 import { claimedDraftIds } from "../lib/dispatch-claims";
 import { logger } from "../lib/logger";
+import { mediaFingerprint } from "../lib/media-store";
+import { asStoredDraft } from "../lib/stored-draft";
 import { tenancyMode, tenantLabel, tenantOrUnauthorized } from "../lib/tenant";
 
 const router: IRouter = Router();
@@ -31,7 +33,19 @@ function draftId(value: unknown): string | null {
 function differsInDispatch(incoming: unknown, stored: unknown): boolean {
   const a = incoming as Record<string, unknown>;
   const b = stored as Record<string, unknown>;
-  const changed = DISPATCH_FIELDS.filter((field) => a?.[field] !== b?.[field]);
+  const changed: string[] = DISPATCH_FIELDS.filter(
+    (field) => a?.[field] !== b?.[field],
+  );
+
+  // Attachments are a dispatch field too — swapping the picture under a send
+  // changes what reaches an audience just as surely as swapping the words. It
+  // cannot join the list above because that compares by identity, and two
+  // arrays holding the same references are never `===`; comparing them that
+  // way would report every save as a change and hold drafts nobody edited.
+  if (mediaFingerprint(asStoredDraft(a)?.media) !== mediaFingerprint(asStoredDraft(b)?.media)) {
+    changed.push("media");
+  }
+
   if (changed.length === 0) return false;
 
   // Marking a post as going out is the browser agreeing with what is already

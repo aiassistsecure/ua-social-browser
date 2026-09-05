@@ -64,6 +64,8 @@ export type ShellWindowOptions = {
   privilegedPreload: string;
   toolbarPreload: string;
   toolbarHtml: string;
+  /** The app icon, used by the window and — on macOS — the dock. */
+  appIcon: string;
   directory: WorkspaceDirectory;
 };
 
@@ -84,6 +86,10 @@ export class ShellWindow {
       minHeight: 640,
       title: "UA Social Browser",
       backgroundColor: "#0b0b0f",
+      // Windows and Linux take the window's icon from here. macOS takes it
+      // from the bundle when packaged, and from the dock icon set in
+      // `main.ts` when run unpackaged.
+      icon: options.appIcon,
       show: false,
     });
 
@@ -298,6 +304,25 @@ export class ShellWindow {
    * an operator ends up posting from a stale view or signing in on a tab that
    * is not the one they are watching. Reuse the workspace's tab and steer it.
    */
+  /**
+   * A live, signed-in page belonging to this workspace, if one is loaded.
+   *
+   * Surfaces first: the network view embedded in the workspace UI is the page
+   * the operator is looking at while the session banner is on screen, so it is
+   * both the most likely to exist and the one whose state they can see. A tab
+   * is the fallback.
+   *
+   * Read-only by intent — the caller reads who is signed in. Nothing here
+   * gives a page any new capability; it has no preload either way.
+   */
+  liveContentsFor(workspaceId: string): WebContents | null {
+    for (const surface of this.surfaces.values()) {
+      if (surface.identity.workspaceId === workspaceId) return surface.view.webContents;
+    }
+    const tab = this.tabs.find((candidate) => candidate.identity.workspaceId === workspaceId);
+    return tab?.view.webContents ?? null;
+  }
+
   async openOrFocusTab(workspaceId: string, url: string): Promise<string> {
     const existing = this.tabs.find((tab) => tab.identity.workspaceId === workspaceId);
     if (!existing) return this.openTab(workspaceId, url);

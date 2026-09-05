@@ -5,7 +5,7 @@ touching anything. `README.md` is the pitch; `DEPLOY.md` is the operational
 manual; this file is what a contributor needs in order not to break the thing
 that makes the project worth having.
 
-Repo: `https://github.com/ethgr0wth/ua-social-browser` (branch `main`, GPLv3).
+Repo: `https://github.com/aiassistsecure/ua-social-browser` (branch `main`, GPLv3).
 
 ---
 
@@ -43,7 +43,13 @@ told to someone about their own account.
 2. **`published` requires the network's own confirmation.** Submitted-but-
    unconfirmed is its own outcome (`409`), is recorded as spent in the ledger,
    and is **never retried automatically** — an automatic retry there is how you
-   double-post. A person looks at the account and decides.
+   double-post. A person looks at the account and decides, and `attested`
+   records that decision: a status meaning *the operator found the post*, which
+   is never collapsed into `published` and always shown with the name of
+   whoever claimed it. An operator's word and the network's confirmation are
+   evidence of different kinds and must stay distinguishable in the ledger
+   forever. `attested` is not `approved` and not `scheduled`, so nothing will
+   ever send it again.
 3. **Approval is read from stored state, never asserted by the request.**
    Editing an approved draft clears the sign-off, which also makes it
    ineligible for scheduled dispatch.
@@ -65,6 +71,16 @@ told to someone about their own account.
    typing into the network's own page.
 10. **No mock data, no silent fallbacks.** Unknown state is reported as unknown
     (Bluesky and Mastodon genuinely cannot be judged from cookies, and say so).
+    A fresh install is empty, and nothing can be approved until the operator
+    has said who they are.
+11. **An approval covers the attachments, not just the words.** The publish
+    path compares the submitted media against the stored draft and refuses a
+    mismatch — a different picture, a dropped one, or edited alt text is a
+    different post. The shell re-hashes every file before uploading it, and a
+    post whose attachment cannot be attached fails rather than going out as
+    text. Media bytes never enter the state document: the browser state is
+    rewritten whole on every edit, so uploads live content-addressed under the
+    data directory and drafts carry references.
 
 If a change requires weakening one of these, that is a conversation with the
 owner, not a refactor.
@@ -104,6 +120,8 @@ scripts/               template leftover
 | `src/publisher/adapters.ts` | Per-network cookies, composer config, sign-in URL, refusal reasons |
 | `src/publisher/compose-driver.ts` | The shared composer flow and its honesty rules |
 | `src/idempotency.ts` | The spent-key ledger on disk |
+| `src/publisher/upload.ts` | CDP `DOM.setFileInputFiles`; the only way to fill a file input |
+| `src/publisher/approved-media.ts` | Path containment + re-hash before anything is uploaded |
 
 ### The API server
 
@@ -214,19 +232,38 @@ unfinished attempt means.
 
 | Networks | State |
 | --- | --- |
-| X | Bespoke adapter with its own selectors and submit flow; the reference implementation. |
+| X | Driven through `compose-driver.ts` like the rest, since its own `xSubmit` fell behind the shared flow's honesty rules — see below. **Verified 2026-09-02:** the owner watched one real post land on a real account (`@interchained`) from the macOS shell — the review card flipped to posted and "View it on X" resolved to the live status. One post, one account, one OS; that is the whole of the evidence. |
 | LinkedIn, Facebook, Threads, Bluesky, Mastodon, Tumblr | Driven through `compose-driver.ts`. **Selectors written from product knowledge, never run against a real signed-in account.** |
-| Instagram, TikTok, YouTube, Pinterest | Refuse: a post needs image or video, a draft carries text. |
+| Instagram, Pinterest | Driven, upload-first: the flow waits for the upload control, attaches, walks any screens in between, and only then types the caption — there is no caption field until an image is in. Both refuse a post with no attachment. Instagram walks crop and filter via `afterAttach`; Pinterest is single-screen. **Selectors unverified, same as the six above.** Pinterest does not model board selection — see `adapters.ts`. |
+| TikTok, YouTube | Refuse: a post needs a *video*, and this build drives image composers rather than an encode-and-wizard upload flow. |
 | Reddit | Refuses: needs a community and a title the draft model does not carry. |
 
 A refusal names its own reason and points at the workspace tab. There is no
 generic `501` any more, and adding a "temporary" one is a regression.
 
+**There are no bespoke adapters left, and that is a rule now, not a tidiness
+preference.** X had its own `xSubmit`, written before `compose-driver.ts` grew
+the rule that a page bouncing to a login says nothing about whether a post went
+out. The shared flow returns `login` there and reports the attempt as
+unconfirmed; `xSubmit` tested success as "the editor is gone and we are no
+longer on `/compose/`", which a login page satisfies — so it reported a
+**phantom post**, on the one adapter anyone had actually verified. A fork does
+not just duplicate code; it stops receiving the fixes. Add a network by adding
+a `COMPOSERS` entry, never a second submit path.
+
+Two details in `COMPOSERS.x` are load-bearing and were the risk in that
+migration: `postLink` must stay scoped inside the toast (the driver's lookup is
+document-wide, and an unscoped `a[href*="/status/"]` matches any post in the
+timeline behind the composer, so every attempt would "succeed" instantly), and
+`login.pathPattern` is deliberately unanchored to match the original test.
+
 Selector drift shows up as a loud failure, never as a phantom post — but **no
 adapter should be called working until someone has watched a real post land on
-a real account**, X included. Nothing in this repo can prove that, because the
-container it was written in has no display and no sessions. When you do verify
-one, update this table, `README.md`, and `DEPLOY.md § 5` in the same commit.
+a real account**. X has cleared that bar once (see the table); the other six
+have not. Nothing in this repo can prove it, because the container it was
+written in has no display and no sessions — verification happens on the
+owner's machine and is recorded here afterwards. When you do verify one, update
+this table, `README.md`, and `DEPLOY.md § 5` in the same commit.
 
 ---
 
@@ -255,6 +292,31 @@ and each is a separate session that must be read on its own.
 
 `adapters.ts` carries a `signInUrl` per network; that is the only thing sign-in
 needs from an adapter.
+
+### Which account is signed in
+
+`sessionStatus` answers this from the session or not at all, in
+`publisher/identity.ts`:
+
+- **`accountId`** comes from the partition's own cookies where a network keeps
+  one there (X `twid`, Instagram/Threads `ds_user_id`, Facebook `c_user`).
+  Proof of which account holds the session, available without loading anything
+  — but a number, not a name.
+- **`accountHandle`** is read off a live signed-in page for that workspace,
+  found by `ShellWindow.liveContentsFor` (the embedded network view first, then
+  a tab). No extra request, no private API, no bearer token. It arrives with
+  `handleSource: "session"`, and the UI names an account only when that field
+  is present.
+- Anything unreadable is `handleUnknown` — a sentence for the operator, not a
+  fallback.
+
+**`workspace.accountHandle` is not consulted, and must not be.** It is a label
+typed once and stored; presenting it as the signed-in account is how this shell
+told its owner he was posting from `@northstarhq`, an account that had never
+existed, while a different account was signed in. A wrong name beside a green
+tick is worse than no name. The selectors that read handles are product
+knowledge and unverified like every other selector here, so a miss has to read
+as unknown.
 
 ---
 
@@ -285,6 +347,42 @@ Two open project tasks live here (see §11).
   app-specific pieces in `components/app` and `sections`. Interactive elements
   carry `data-testid` (`button-*`, `filter-*`, `draft-<id>`, `queue-<id>`,
   `calendar-post-<id>`).
+- **The AI Composer is a pool, not a result set.** Suggestions accumulate:
+  "Keep going" appends a batch (duplicates dropped), "Start over" replaces.
+  Acting on a card — saved as a draft, or discarded — removes it, after a
+  ~420ms holo sweep (`.ua-dissolving` in `index.css`); the card is dropped from
+  state when the animation ends, because dropping it on click unmounts the
+  element and nothing plays. This is composer-only: the review queue and the
+  calendar keep every draft, which is where a saved one is worked on.
+  Candidates carry a **stable id and a fixed ordinal** (`lib/candidates.ts`).
+  Review state is keyed by that id and never by array index — with removable
+  cards an index key slides one card's "I read this and take responsibility for
+  it" onto different text, which then reaches drafts under a sign-off nobody
+  gave. There is a test named for that exact hazard.
+- **A field added to a persisted type must be backfilled in `lib/hydrate.ts`
+  in the same commit.** The ledger holds documents written by every build that
+  came before, so a new required field is undefined on all of them and
+  TypeScript cannot see the mismatch — the type says required, the JSON on disk
+  says nothing. Attachments shipped without this and took the review queue
+  down: drafts written before `media` existed came back undefined, the queue
+  read `.length` inside its `map`, and the section died in its error boundary,
+  hiding three healthy drafts because one old one sat beside them. Hydration
+  fills gaps in the in-memory copy only; it never rewrites the ledger.
+- **The publish budget is three coupled numbers**: `SETUP_BUDGET_MS` (12s),
+  `COMPOSE_BUDGET_MS` (18s, struck *after* the page loads), and the API
+  server's bridge `REQUEST_TIMEOUT_MS` (40s), which must outlast their sum.
+  The compose deadline used to be struck before an unbounded `loadURL`, so a
+  cold start left confirmation no window: measured at 20.7s for the first
+  publish after launch against a 17s budget, versus ~6s warm. The post went out
+  and was recorded `failed`. `PRE_CONFIRM_SHARE` now guarantees confirmation a
+  reserve, and `onPhase` logs every phase duration — read that log before
+  theorising about a slow publish.
+- **A file dropped anywhere but a card is swallowed in `App.tsx`.** The default
+  action for a file dropped on a page is to navigate to it, and this page is the
+  privileged UI origin — the one view holding `window.uaShell`. A near miss
+  while attaching a photo would replace the whole app with an image viewer,
+  with no way back. The window-level listener prevents that and does nothing
+  else; cards that accept a drop call `preventDefault` themselves.
 - **Navigation** is section state in `App.tsx`, not a router.
   `onNavigate(section, { draftId })` focuses one post; the review queue widens
   its filter and scrolls to it. If a post can belong to another workspace,
@@ -307,9 +405,22 @@ live), scheduled dispatch, the append-only ledger and its integrity check, the
 idempotency ledger, the bridge contract, live sign-in end to end up to the point
 where a real browser session is needed, and the calendar → review-queue flow.
 
+**Verified on the owner's machine (2026-09-02):** the full approve → publish →
+confirm round-trip on X — a real post from the macOS shell, through the hidden
+composer window in the workspace's own session, confirmed by X and shown as
+posted with a working "View it on X" link. That is one post on one account;
+treat it as proof the path works, not as coverage of every X UI state.
+
 **Not verified, and must not be described as working:** the six shared-composer
 adapters against real accounts (§7). No display exists in the Replit container,
 so nobody has watched them run.
+
+**A fresh install is empty.** `artifacts/ua-social-browser/src/data.ts` boots
+with no workspaces, drafts, accounts, or activity, and no approver name. The
+review queue refuses to approve until Settings › Approver name is filled, and
+the publish path sends the recorded approval verbatim or refuses — there is no
+`'Operator'` fallback. Approvals already recorded keep the name they were
+signed under; the ledger is not rewritten.
 
 **Dead until configured:** AI drafting needs `AIASSIST_API_KEY` (the legacy
 `AIAssIST_API_KEY` spelling still works with a deprecation warning). Without it
@@ -319,6 +430,20 @@ so nobody has watched them run.
 
 - Tell the operator when a scheduled post did not go out.
 - Stop the app and server drifting apart on scheduling data.
+
+**Media:** drafts carry images and video on the seven driven networks. Uploads
+are stored content-addressed by `artifacts/api-server/src/lib/media-store.ts`,
+handed to the shell as paths, and attached with CDP `DOM.setFileInputFiles`
+(the debugger is already attached for UA emulation, so it is reused). The four
+Instagram and Pinterest are driven too, through an upload-first path with
+optional `afterAttach` steps for Instagram's crop and filter screens. TikTok,
+YouTube and Reddit still refuse. **Not verified:** no file-input selector or
+step selector here has been run against a real signed-in account.
+
+**Pinterest posts to whichever board is already selected.** A pin belongs to a
+board and nothing in the draft model names one, so the flow does not choose:
+when no board is selected the publish button never enables and the attempt
+fails loudly. Check the selected board before trusting a scheduled pin.
 
 **Not built:** signed installers per OS, per-tab UA switching (it is per
 workspace), a sign-in indicator on the shell's own tab strip, any real
@@ -334,6 +459,15 @@ multi-tenant auth layer.
   on macOS/Windows — where the shell is actually packaged — with
   `Cannot find module @rollup/rollup-darwin-x64`. They have been removed. If a
   template sync brings them back, remove them again.
+- **Seed data reached a real audience.** `data.ts` once shipped a fictional
+  operator ("Alex Morgan"), fictional accounts, and sample drafts so the UI
+  looked alive. The owner approved one of those sample drafts while the sample
+  name was still in Settings and published it from a real account, so the
+  ledger recorded a real post under a person who does not exist — and because
+  an approval is a snapshot of who signed at the time, renaming afterwards
+  could not fix it. The seed is gone and the approver name is required before
+  approval. Do not add "just a little" sample content back; invariant 10 is
+  not about aesthetics.
 - **`minimumReleaseAge: 1440`** in `pnpm-workspace.yaml` is a supply-chain
   guard. Leave it on; use the exclude list if something is genuinely urgent.
 - **`nedb-engine` stays external** in the api-server esbuild bundle — bundling

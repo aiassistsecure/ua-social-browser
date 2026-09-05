@@ -146,6 +146,7 @@ function claimDueDraft(
     draftId: draft.id,
     platform: draft.platform,
     body: draft.body,
+    media: draft.media,
     approval: { approvedBy: draft.approvedBy, approvedAt: draft.approvedAt },
     idempotencyKey,
   });

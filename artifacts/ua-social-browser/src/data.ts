@@ -1,40 +1,26 @@
 import type { BrowserState } from './types';
 
+/**
+ * The state a fresh install boots with, and what "Reset to defaults" returns to.
+ *
+ * It is deliberately empty of anything that looks like a tenant. An earlier
+ * version shipped a fictional operator, three fictional accounts, and sample
+ * drafts here so the UI had something to show. That broke the project's own
+ * rule against mock data in a way that reached a real audience: an operator
+ * approved one of the sample drafts while the sample operator name was still
+ * in Settings, published it from their real account, and the ledger recorded
+ * the sign-off under a person who does not exist. Approvals are snapshots of
+ * who signed at the time, so no later rename could correct it — the only fix
+ * was for the fiction never to have been there.
+ *
+ * UA profiles stay. They are declared device configurations (real browser
+ * strings, visible in the toolbar), not identities, and a workspace needs one
+ * to exist before it can be created.
+ */
 export const initialState: BrowserState = {
   version: 1,
-  activeWorkspaceId: 'ws-linkedin',
-  workspaces: [
-    {
-      id: 'ws-linkedin',
-      name: 'Founder Voice',
-      profileId: 'ua-mac',
-      platform: 'linkedin',
-      accountHandle: '@alex.morgan',
-      status: 'ready',
-      accent: '#7c5cff',
-      lastActive: 'Now',
-    },
-    {
-      id: 'ws-x',
-      name: 'Product Updates',
-      profileId: 'ua-windows',
-      platform: 'x',
-      accountHandle: '@northstarhq',
-      status: 'ready',
-      accent: '#40d9a0',
-      lastActive: '12m',
-    },
-    {
-      id: 'ws-instagram',
-      name: 'Studio Visuals',
-      profileId: 'ua-iphone',
-      platform: 'instagram',
-      accountHandle: '@northstar.studio',
-      status: 'attention',
-      accent: '#ff8d69',
-      lastActive: '2h',
-    },
-  ],
+  activeWorkspaceId: '',
+  workspaces: [],
   uaProfiles: [
     {
       id: 'ua-mac',
@@ -85,110 +71,19 @@ export const initialState: BrowserState = {
       color: '#4bb3fd',
     },
   ],
-  drafts: [
-    {
-      id: 'draft-1',
-      workspaceId: 'ws-linkedin',
-      platform: 'linkedin',
-      body: 'Most teams do not have an AI problem. They have a context problem. The work gets better when the model can see the decisions that shaped it.',
-      status: 'scheduled',
-      scheduledFor: new Date(Date.now() + 86400000).toISOString(),
-      approvedBy: 'Alex Morgan',
-      approvedAt: new Date(Date.now() - 3600000).toISOString(),
-      postUrl: null,
-      lastError: null,
-      createdAt: new Date(Date.now() - 86400000).toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      id: 'draft-2',
-      workspaceId: 'ws-x',
-      platform: 'x',
-      body: 'Shipping the smallest useful version is a strategy, not a compromise.',
-      status: 'draft',
-      scheduledFor: null,
-      approvedBy: null,
-      approvedAt: null,
-      postUrl: null,
-      lastError: null,
-      createdAt: new Date(Date.now() - 7200000).toISOString(),
-      updatedAt: new Date(Date.now() - 7200000).toISOString(),
-    },
-    {
-      id: 'draft-3',
-      workspaceId: 'ws-instagram',
-      platform: 'instagram',
-      body: 'A look behind the build: fewer meetings, sharper decisions, better work.',
-      status: 'scheduled',
-      scheduledFor: new Date(Date.now() + 172800000).toISOString(),
-      approvedBy: 'Alex Morgan',
-      approvedAt: new Date(Date.now() - 7200000).toISOString(),
-      postUrl: null,
-      lastError: null,
-      createdAt: new Date(Date.now() - 172800000).toISOString(),
-      updatedAt: new Date(Date.now() - 3600000).toISOString(),
-    },
-  ],
-  accounts: [
-    {
-      id: 'account-1',
-      workspaceId: 'ws-linkedin',
-      platform: 'linkedin',
-      handle: '@alex.morgan',
-      displayName: 'Alex Morgan',
-      connected: true,
-      avatar: 'AM',
-    },
-    {
-      id: 'account-2',
-      workspaceId: 'ws-x',
-      platform: 'x',
-      handle: '@northstarhq',
-      displayName: 'Northstar',
-      connected: true,
-      avatar: 'NS',
-    },
-    {
-      id: 'account-3',
-      workspaceId: 'ws-instagram',
-      platform: 'instagram',
-      handle: '@northstar.studio',
-      displayName: 'Northstar Studio',
-      connected: false,
-      avatar: 'ST',
-    },
-  ],
-  activity: [
-    {
-      id: 'activity-1',
-      title: 'AI variants generated',
-      detail: '3 LinkedIn options for Founder Voice',
-      timestamp: '4 min ago',
-      type: 'ai',
-    },
-    {
-      id: 'activity-2',
-      title: 'Draft scheduled',
-      detail: 'Studio Visuals · tomorrow at 10:30',
-      timestamp: '28 min ago',
-      type: 'draft',
-    },
-    {
-      id: 'activity-3',
-      title: 'Workspace isolated',
-      detail: 'Product Updates opened with Chrome · Windows',
-      timestamp: '1 hr ago',
-      type: 'workspace',
-    },
-  ],
+  drafts: [],
+  accounts: [],
+  activity: [],
   settings: {
     theme: 'dark',
-    operatorName: 'Alex Morgan',
+    // Empty on purpose: the review queue refuses to approve until a real name
+    // is here, because this string is what the ledger records as the signer.
+    operatorName: '',
     confirmBeforePublish: true,
     storeAiPrompts: false,
     model: 'GLM-4-32B',
     provider: 'pin',
   },
-  usage: { inputTokens: 14820, outputTokens: 6240, requests: 48 },
+  usage: { inputTokens: 0, outputTokens: 0, requests: 0 },
   updatedAt: new Date().toISOString(),
 };

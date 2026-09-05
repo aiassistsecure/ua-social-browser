@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/toaster';
 import { BrowserChrome } from '@/components/app/browser-chrome';
+import { ShellMark } from '@/components/app/shell-mark';
 import { SideNav } from '@/components/app/side-nav';
 import { useBrowserState } from '@/hooks/use-browser-state';
 import { useScheduledDispatches } from '@/hooks/use-scheduler';
@@ -117,6 +118,15 @@ function Workbench() {
     return (
       <div className="flex min-h-screen items-center justify-center p-8 text-center">
         <div className="max-w-sm space-y-3">
+          {/*
+            The one screen shown before any workspace exists. In the chrome the
+            mark takes the active workspace's accent; here there is no workspace
+            to speak for, so it stands in the app's own primary.
+          */}
+          <ShellMark
+            accent="hsl(var(--primary))"
+            className="mx-auto h-11 w-11"
+          />
           <h1 className="text-lg font-semibold">No workspaces</h1>
           <p className="text-sm text-muted-foreground">
             Every workspace is an isolated browsing identity. Create one to
@@ -193,6 +203,29 @@ export default function App() {
   // The shell is a dark desktop surface; there is no light-mode toggle yet.
   useEffect(() => {
     document.documentElement.classList.add('dark');
+  }, []);
+
+  /**
+   * Swallow file drops that miss their target.
+   *
+   * The default action for a file dropped on a page is to navigate to it. This
+   * page is the privileged UI origin — the one view holding `window.uaShell` —
+   * so a near miss while attaching a photo would replace the whole app with an
+   * image viewer and there is no way back to it from there. Cards that accept
+   * a drop call `preventDefault` themselves; this catches everything else and
+   * does nothing, which is the correct outcome for a missed drop.
+   */
+  useEffect(() => {
+    const swallow = (event: DragEvent) => {
+      if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return;
+      event.preventDefault();
+    };
+    window.addEventListener('dragover', swallow);
+    window.addEventListener('drop', swallow);
+    return () => {
+      window.removeEventListener('dragover', swallow);
+      window.removeEventListener('drop', swallow);
+    };
   }, []);
 
   return (

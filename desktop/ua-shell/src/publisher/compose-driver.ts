@@ -722,18 +722,50 @@ export function composerPage(contents: WebContents, config: ComposerConfig): Com
       return runInPage<{ ok: boolean; detail?: string }>(
         contents,
         (input: { cfg: ComposerConfig; text: string }) => {
-          const editor = document.querySelector(input.cfg.editor) as HTMLElement | null;
+          const expected = input.text.trim();
+
+          /**
+           * Pick the editor, preferring one that can actually be typed into.
+           *
+           * `querySelector` returns whichever match comes first in the
+           * document, and a composer's selector list often spans both a
+           * `<textarea>` and a contenteditable `div` — the two are filled by
+           * completely different means. Taking the first match blindly is how
+           * a div ended up being treated as a textarea.
+           */
+          const candidates = Array.from(
+            document.querySelectorAll(input.cfg.editor),
+          ) as HTMLElement[];
+          const editor =
+            candidates.find(
+              (el) =>
+                el.offsetParent !== null &&
+                (el instanceof HTMLTextAreaElement ||
+                  el instanceof HTMLInputElement ||
+                  el.isContentEditable),
+            ) ??
+            candidates[0] ??
+            null;
+
           if (!editor) {
-            return { ok: false, detail: "The composer disappeared before the text was entered." };
+            return {
+              ok: false,
+              detail: "The composer disappeared before the text was entered.",
+            };
           }
 
-          const expected = input.text.trim();
-          editor.focus();
+          /** What the editor currently holds, by its own nature. */
+          const read = (el: HTMLElement): string => {
+            if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+              return (el.value ?? "").trim();
+            }
+            return (el.textContent ?? "").replace(/\u200b/g, "").trim();
+          };
 
-          if (input.cfg.editorKind === "textarea") {
-            // A React-controlled field ignores a plain value assignment, so go
+          /** Fill a value-bearing field the way typing does. */
+          const fillField = (field: HTMLTextAreaElement | HTMLInputElement) => {
+            // A React-controlled field ignores a plain assignment, so go
             // through the native setter and announce it the way typing does.
-            const field = editor as HTMLTextAreaElement | HTMLInputElement;
             const prototype =
               field instanceof HTMLTextAreaElement
                 ? HTMLTextAreaElement.prototype
@@ -743,26 +775,65 @@ export function composerPage(contents: WebContents, config: ComposerConfig): Com
             else field.value = input.text;
             field.dispatchEvent(new Event("input", { bubbles: true }));
             field.dispatchEvent(new Event("change", { bubbles: true }));
+          };
 
-            const written = (field.value ?? "").trim();
-            if (written !== expected) {
-              return {
-                ok: false,
-                detail: `The composer holds ${written.length} characters but the post is ${expected.length}.`,
-              };
-            }
-            return { ok: true };
+          const fillContentEditable = (el: HTMLElement) => {
+            document.execCommand("selectAll", false);
+            document.execCommand("insertText", false, input.text);
+            // Some editors only listen for this.
+            el.dispatchEvent(new InputEvent("input", { bubbles: true }));
+          };
+
+          editor.focus();
+
+          /**
+           * The element's own nature decides how it is filled, not the config.
+           *
+           * `editorKind` is a single declared value while the selector can
+           * match either kind, and a network that serves a textarea to one
+           * device and a contenteditable to another makes the declaration
+           * wrong for one of them. When that happened the value setter was
+           * called on a `div`, did nothing, `field.value` read back
+           * `undefined`, and the flow reported "the composer holds 0
+           * characters" — true, but with no clue why.
+           */
+          const isField =
+            editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement;
+
+          if (isField) {
+            fillField(editor as HTMLTextAreaElement | HTMLInputElement);
+          } else {
+            fillContentEditable(editor);
           }
 
-          document.execCommand("selectAll", false);
-          document.execCommand("insertText", false, input.text);
-          const written = (editor.textContent ?? "").replace(/\u200b/g, "").trim();
+          let written = read(editor);
+
+          // One cross-attempt before giving up: an element that is both (or
+          // neither) is rare but cheap to cover, and a refusal here costs the
+          // operator a whole scheduled post.
           if (written !== expected) {
+            if (isField) fillContentEditable(editor);
+            else if (
+              editor instanceof HTMLTextAreaElement ||
+              editor instanceof HTMLInputElement
+            ) {
+              fillField(editor);
+            }
+            written = read(editor);
+          }
+
+          if (written !== expected) {
+            // Name what was typed into. "0 characters" alone sent the last
+            // failure to the wrong suspect entirely.
+            const describe = `${editor.tagName.toLowerCase()}${
+              editor.isContentEditable ? "[contenteditable]" : ""
+            }`;
             return {
               ok: false,
-              detail: `The composer holds ${written.length} characters but the post is ${expected.length}.`,
+              detail: `The composer holds ${written.length} characters but the post is ${expected.length}. Typed into ${describe}, one of ${candidates.length} matching this build's editor selector.`,
             };
           }
+
           return { ok: true };
         },
         { cfg: config, text },

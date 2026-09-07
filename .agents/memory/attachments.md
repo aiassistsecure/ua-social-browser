@@ -159,3 +159,37 @@ says 393 × 852) and **nothing applies it**. `viewport` is not in
 publish window stays hardcoded at 1280×900 — a phone's user agent sent from a
 desktop-sized window. `publisher/device.ts` has `parseViewport` and
 `publishViewportFor` ready for it; wiring them through is its own change.
+
+### The editor's own nature decides how it is filled
+
+After the route flow started working, the next failure was:
+
+> Could not enter the post text on Instagram. The composer holds 0 characters
+> but the post is 319.
+
+`editorKind` is a **single declared value**, but an editor selector routinely
+spans both a `<textarea>` and a contenteditable `div`, and `querySelector`
+returns whichever comes first in the document. When the declared kind and the
+matched element disagree, the value setter is called on a `div`, does nothing,
+`field.value` reads back `undefined`, and `(undefined ?? "").trim().length` is
+exactly the 0 that was reported. A network that serves a textarea to one device
+class and a contenteditable to another makes the declaration wrong for one of
+them by construction.
+
+So `enterText` now decides from the element:
+
+- among all matches it prefers a **visible, actually-editable** one rather than
+  taking the first blindly;
+- a `textarea`/`input` gets the native-setter-plus-`input`-event path, a
+  contenteditable gets `execCommand`, chosen by `instanceof` / `isContentEditable`;
+- if the first attempt does not read back, it tries the other path once before
+  refusing — a refusal here costs a whole scheduled post;
+- the refusal **names the element it typed into** and how many matched, because
+  "0 characters" alone pointed at the wrong suspect entirely.
+
+Verified against the live route flow (desktop UA): 75 of 75 characters written,
+and **React's own props for the textarea held all 75** — so the framework
+registered the caption rather than only the DOM node. That is the check that
+matters: a caption present in the DOM but absent from the framework's state
+would post the picture without it, which is a different post from the approved
+one.
